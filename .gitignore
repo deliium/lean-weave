@@ -1,0 +1,51 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Test / type / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Runtime state (lean-weave)
+.lean-weave/
+
+# Spike checkpoint DBs and local probe artifacts
+spikes/**/*.sqlite
+spikes/**/*.sqlite3
+spikes/**/*.db
+spikes/**/checkpoints/
+*.checkpoint.sqlite
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# uv / packaging noise
+uv-cache/
