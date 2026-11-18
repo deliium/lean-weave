@@ -6,6 +6,7 @@ Token-efficient AI coding pipeline that automates feature development with struc
 
 - **Language:** Python ≥3.12
 - **Packaging:** uv (`pyproject.toml`, `src/lean_weave`)
+- **CLI/configuration foundation:** Typer (Click-based release), Click, PyYAML; product configuration is `.lean-weave/config.yaml` (separate from AI Factory tooling). Executables: `wl` and `lean-weave`.
 - **LLM:** DeepSeek OpenAI-compatible API (`deepseek-flash` / `deepseek-v4-pro`)
 - **Orchestrator (MVP 1):** minimal deterministic state machine (LangGraph deferred; spike retained)
 - **Schemas:** Pydantic FeatureState / FeaturePlan / tasks / VerificationResult

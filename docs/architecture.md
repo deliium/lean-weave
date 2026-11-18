@@ -1,4 +1,4 @@
-[← Getting Started](getting-started.md) · [Back to README](../README.md)
+[← Getting Started](getting-started.md) · [Back to README](../README.md) · [CLI Reference →](cli.md)
 
 # Architecture
 

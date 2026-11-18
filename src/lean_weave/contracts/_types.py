@@ -4,16 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Literal, Mapping, Sequence, TypedDict
 
+from lean_weave.schemas.models import TokenUsage
+
 StageName = Literal["plan", "implement", "verify", "retry"]
 ThinkingMode = Literal["enabled", "disabled"]
-
-
-class TokenUsage(TypedDict, total=False):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-    reasoning_tokens: int
-    prompt_cache_hit_tokens: int
 
 
 class LLMMessage(TypedDict, total=False):

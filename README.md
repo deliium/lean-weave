@@ -2,37 +2,33 @@
 
 > Token-efficient AI coding pipeline — plan, implement, verify, and retry with structured state and minimal LLM tokens.
 
-lean-weave automates feature development using DeepSeek, deterministic local verification, and a single-process workflow. **MVP 1** validates architecture (contracts, schemas, spikes, ADRs); the production feature runner comes in later plans.
+lean-weave is building a single-process feature workflow using DeepSeek and deterministic local verification. **v1-02** provides the offline CLI, validated configuration, serializable models, and typed injection foundation; the production feature runner comes in later plans.
 
 ## Quick Start
 
 ```bash
-uv sync --all-groups
-uv run pytest tests/spikes tests/schemas tests/contracts
+uv sync
+uv run wl init
+uv run wl doctor
 ```
 
-Expected: **14 passed** (DeepSeek live cases skip unless `DEEPSEEK_API_KEY` is set).
+The executable aliases are `wl` and `lean-weave`, both using the same app.
+`lean_weave:main` remains the canonical Python entrypoint; `aif` is not an executable.
 
 ## Key Features
 
 - **Structured state** — `FeatureState` / plan / tasks / verification; not full chat history
-- **Token budgets** — stage-scoped context with digests, allowlists, and hard bans on secrets
+- **Token-budget design** — stage-scoped context with digests, allowlists, and hard bans on secrets
 - **DeepSeek-ready** — OpenAI-compatible provider contract with thinking/tools/`reasoning_content` rules
-- **Minimal orchestrator** — deterministic state machine for MVP 1; LangGraph deferred after spike validation
-- **Deterministic verify** — prefer compile/tests/schema checks over LLM review
+- **Orchestrator design** — deterministic state machine for MVP 1; LangGraph deferred after spike validation
+- **Deterministic verification design** — prefer compile/tests/schema checks over LLM review
 
 ## Example
 
 ```bash
-# Stub CLI (hello only in MVP 1)
-uv run lean-weave
-
-# Architecture gate suite
-uv run pytest tests/spikes tests/schemas tests/contracts
-
-# Optional live DeepSeek probe
-export DEEPSEEK_API_KEY=...   # never commit
-PYTHONPATH=spikes uv run python -m deepseek_probe.probe
+# Inspect configuration without printing secrets
+uv run wl config show --format json
+uv run wl feature --help
 ```
 
 ---
@@ -43,6 +39,7 @@ PYTHONPATH=spikes uv run python -m deepseek_probe.probe
 |-------|-------------|
 | [Getting Started](docs/getting-started.md) | Install, sync, tests, logging, spikes |
 | [Architecture](docs/architecture.md) | Components, orchestrator decision, boundaries |
+| [CLI Reference](docs/cli.md) | Commands, configuration, errors, injection |
 
 ### Agent artifacts
 
@@ -58,4 +55,4 @@ No MCP, ACP, Docker orchestration, background workers, or multi-agent runtime.
 
 ## License
 
-License not set yet.
+[CC0 1.0 Universal](LICENSE).

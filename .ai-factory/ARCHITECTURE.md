@@ -47,6 +47,17 @@ Methodology reuse from `aif-plan` / `aif-implement` / `aif-verify` is **artifact
 Proposed layout: `.ai-factory/references/v1-01-project-structure.md`.  
 Canonical entry: `lean_weave:main`. `src/main.py` is an IDE sample to remove/rehome later.
 
+Foundation modules: `config/` holds strict YAML models and safe file IO;
+`logging_setup.py` owns application stderr logging and secret redaction;
+`errors.py` holds the shared application error hierarchy. Configuration paths
+and state containment currently use the working directory as the project root.
+
+`app.py` supplies a typed `AppContext` with optional injected Protocol
+implementations; no providers are constructed yet. `cli/` is the Typer
+dispatch/error boundary with offline init, config inspection, doctor, and
+help-only feature commands. Both `wl` and `lean-weave` use this single app;
+`lean_weave:main` remains the canonical Python entrypoint.
+
 ## ADRs
 
 | ADR | Topic |

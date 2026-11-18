@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
-import logging
-import os
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 SCHEMA_VERSION = "1.0.0"
 
-_level = (
-    os.environ.get("LEAN_WEAVE_LOG_LEVEL") or os.environ.get("LOG_LEVEL") or "INFO"
-).upper()
-log = logging.getLogger("lean_weave.schemas")
-if not logging.getLogger().handlers:
-    logging.basicConfig(level=getattr(logging, _level, logging.INFO), format="%(levelname)s %(message)s")
+class FeatureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    feature_id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    title: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
+
+class TokenUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    prompt_cache_hit_tokens: int = Field(default=0, ge=0)
 
 class Stage(str, Enum):
     PLAN = "plan"
@@ -115,17 +123,3 @@ TRANSITIONS: dict[tuple[Stage, str], Stage] = {
     (Stage.RETRY, "requeue"): Stage.IMPLEMENT,
     (Stage.RETRY, "exhausted"): Stage.FAILED,
 }
-
-log.info(
-    "[Schemas.define] schema versions and entity list {entity=FeatureState, version=%s} entities=%s",
-    SCHEMA_VERSION,
-    ["FeatureState", "FeaturePlan", "ImplementationTask", "VerificationResult"],
-)
-for (src, event), dst in TRANSITIONS.items():
-    log.debug(
-        "[Schemas.define] transition table edge {entity=FeatureState, version=%s} %s -%s-> %s",
-        SCHEMA_VERSION,
-        src.value,
-        event,
-        dst.value,
-    )

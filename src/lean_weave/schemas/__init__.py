@@ -3,10 +3,12 @@
 from .models import (
     SCHEMA_VERSION,
     FeaturePlan,
+    FeatureRequest,
     FeatureState,
     ImplementationTask,
     Stage,
     TaskStatus,
+    TokenUsage,
     VerificationResult,
     VerificationStatus,
 )
@@ -17,6 +19,8 @@ __all__ = [
     "TaskStatus",
     "VerificationStatus",
     "FeaturePlan",
+    "FeatureRequest",
+    "TokenUsage",
     "FeatureState",
     "ImplementationTask",
     "VerificationResult",

@@ -12,40 +12,62 @@
 From the repository root:
 
 ```bash
-uv sync --all-groups
+uv sync
 ```
 
-That installs runtime deps (`pydantic`), spike libs (`openai`, `langgraph`, …), and `pytest`.
+That installs runtime dependencies (Pydantic, Typer, Click, PyYAML) and pytest.
+Dependency acquisition may require a package index or a populated cache.
 
-Selective sync:
+## First run
 
 ```bash
-uv sync --group spikes --group dev
+uv run wl init
+uv run wl config show
+uv run wl doctor
+uv run wl feature --help
 ```
 
-## Verify the install
+`init` prints the new `.lean-weave/config.yaml` path; running it again refuses
+to overwrite without `--force`. Doctor reports local prerequisites; an absent
+API key is informational and does not prevent offline use.
+
+The aliases `wl` and `lean-weave` invoke the same application. `aif` is not
+an executable. `lean_weave:main` is the canonical Python entrypoint.
+
+## Verify offline
+
+Prepare one of these environments before running offline tests:
 
 ```bash
-uv run pytest tests/spikes tests/schemas tests/contracts
+# Core (no spike libraries)
+uv sync
+uv run --offline --no-sync pytest --ignore=tests/spikes
+
+# Full architecture regression (explicit optional dependencies)
+uv sync --group spikes
+uv run --offline --no-sync pytest
 ```
 
-You should see **14 passed**. Live DeepSeek cases are skipped when `DEEPSEEK_API_KEY` is absent.
-
-Stub CLI (MVP 1 hello only):
-
-```bash
-uv run lean-weave
-# → Hello from lean-weave!
-```
+Plain `uv sync` does not support full-suite collection: architecture spikes
+import optional packages. Test execution requires no API access. An autouse
+socket guard blocks IPv4/IPv6 connections unless a test explicitly carries
+`@pytest.mark.network`; no foundation test uses that marker. Unix sockets
+and subprocesses remain allowed. The guard only covers the pytest process,
+not child processes or collection-time imports.
 
 ## Logging
 
-Spike and future pipeline logging use:
+Application logs go to stderr; configuration output goes to stdout.
 
 ```bash
-LEAN_WEAVE_LOG_LEVEL=DEBUG uv run pytest tests/spikes -s
+LEAN_WEAVE_LOG_LEVEL=DEBUG uv run wl config show
+uv run wl --log-format json doctor
 # fallback: LOG_LEVEL
 ```
+
+Level precedence: flag > `LEAN_WEAVE_LOG_LEVEL` > `LOG_LEVEL` > YAML > INFO.
+Format precedence: flag > YAML > text. Environment overrides are not persisted.
+See [CLI Reference](cli.md) for redaction and configuration rules.
 
 ## Spikes (not production CLI)
 
@@ -72,5 +94,5 @@ PYTHONPATH=spikes uv run python -m deepseek_probe.probe
 ## See Also
 
 - [Architecture](architecture.md) — system design overview
+- [CLI Reference](cli.md) — commands and configuration
 - [spikes/README.md](../spikes/README.md) — probe setup and hygiene
-- [DESCRIPTION](../.ai-factory/DESCRIPTION.md) — purpose and stack tags
