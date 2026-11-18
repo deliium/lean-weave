@@ -60,6 +60,19 @@ def test_config_output_redaction_and_stderr(monkeypatch, fmt, env_name):
     assert "[CLI.config.show]" in result.stderr
 
 
+@pytest.mark.parametrize("fmt", ["yaml", "json"])
+def test_config_output_redacts_key_embedded_in_configuration(monkeypatch, fmt):
+    sentinel = "embedded-verification-dummy-credential"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", sentinel)
+    Path("config.yaml").write_text(
+        f"llm:\n  base_url: https://api.deepseek.com/{sentinel}\n"
+    )
+    result = runner.invoke(app, ["--config", "config.yaml", "config", "show", "--format", fmt])
+    assert result.exit_code == 0, result.output
+    assert sentinel not in result.output
+    assert "[REDACTED]" in result.stdout
+
+
 @pytest.mark.parametrize("source", ["missing", "invalid"])
 def test_config_error_code(source):
     if source == "invalid":

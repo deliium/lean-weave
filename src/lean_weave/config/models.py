@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -21,6 +22,29 @@ class LLMConfig(ConfigModel):
     thinking: bool = False
     api_key_env: str = Field(default="DEEPSEEK_API_KEY", pattern=r"^[A-Z_][A-Z0-9_]*$")
     timeout_s: float = Field(default=60, gt=0, allow_inf_nan=False)
+    max_retries: int = Field(default=2, ge=0, le=5)
+    max_output_tokens: int = Field(default=1024, gt=0)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        if not value or value != value.strip() or any(ord(char) < 32 for char in value):
+            raise ValueError("must be an absolute HTTPS URL without control characters")
+        try:
+            parts = urlsplit(value)
+        except ValueError:
+            raise ValueError("must be a valid absolute HTTPS URL") from None
+        if parts.scheme != "https" or not parts.hostname:
+            raise ValueError("must be an absolute HTTPS URL")
+        if parts.username is not None or parts.password is not None:
+            raise ValueError("must not contain user information")
+        if parts.query or parts.fragment:
+            raise ValueError("must not contain a query or fragment")
+        try:
+            parts.port
+        except ValueError:
+            raise ValueError("must contain a valid port") from None
+        return value
 
 
 class LoggingConfig(ConfigModel):
@@ -31,6 +55,7 @@ class LoggingConfig(ConfigModel):
 class WorkflowConfig(ConfigModel):
     state_dir: str = ".lean-weave"
     max_retries: int = Field(default=2, ge=0)
+    feature_token_budget: int = Field(default=20000, gt=0)
 
     @field_validator("state_dir")
     @classmethod

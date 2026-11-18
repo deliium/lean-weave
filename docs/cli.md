@@ -18,6 +18,7 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl init [--force]` | Create commented defaults; refuse overwrite unless forced |
 | `wl config show [--format yaml\|json]` | Print file/default settings and `api_key_present` |
 | `wl doctor` | Check Python, package, config, state-directory writability, git and key presence |
+| `wl llm check` | Opt-in DeepSeek smoke test: one small fixed request plus safe usage output |
 | `wl feature` / `wl feature --help` | Display help only; no workflow execution |
 | `wl --help` | Show commands and global options |
 
@@ -58,19 +59,28 @@ llm:
   thinking: false
   api_key_env: DEEPSEEK_API_KEY
   timeout_s: 60.0
+  max_retries: 2
+  max_output_tokens: 1024
 logging:
   level: INFO
   format: text
 workflow:
   state_dir: .lean-weave
   max_retries: 2
+  feature_token_budget: 20000
 ```
 
 Partial mappings merge with model defaults. All sections reject unknown keys.
 `provider` supports only `deepseek`; `timeout_s` must be finite and positive;
-`max_retries` must be a non-negative integer. Logging levels are DEBUG, INFO,
+`llm.max_retries` is 0–5 extra attempts (default 2); `llm.max_output_tokens`
+must be positive (default 1024). `workflow.max_retries` is reserved for future
+workflow retries; `workflow.feature_token_budget` is a positive total-processed
+token budget per feature (default 20000). Logging levels are DEBUG, INFO,
 WARNING, ERROR, CRITICAL; formats are text or json.
 `version` supports only 1. `api_key_env` must match `^[A-Z_][A-Z0-9_]*$`.
+`base_url` must be an absolute HTTPS URL with a host, no user information, and
+no query or fragment; an operator-selected path is preserved. The configured
+path must not contain the API key value.
 `state_dir` must be non-empty and relative, with no `..` segments; resolved
 symlinks must stay inside the project root.
 
@@ -78,6 +88,93 @@ Secrets are environment-only. Set the variable named by `llm.api_key_env`
 through your environment/secret manager; never put a key in YAML.
 `config show` reports only whether that variable has a non-empty value.
 It does not apply logging environment overrides to the printed configuration.
+Known secret values embedded in configuration strings are redacted from both
+YAML and JSON output.
+
+## LLM gateway
+
+The production gateway is `lean_weave.providers.deepseek.DeepSeekProvider`,
+using the locked OpenAI-compatible SDK against DeepSeek. It is constructed only
+on demand by `lean_weave.app.create_llm_provider`; help, init, config show,
+doctor and feature commands do not create a client, require a key, open the
+ledger, or touch the network.
+
+Supported MVP combinations:
+
+| Mode | Behavior |
+|------|----------|
+| Plain completion | Caller supplies messages; no implicit transcript or system prompt is added |
+| Thinking | `extra_body.thinking` is sent explicitly as `enabled` or `disabled`; reasoning effort requires thinking |
+| Tools | Calls are returned, never executed. Thinking-plus-tools replay requires prior assistant `reasoning_content` and matching tool result IDs |
+| JSON object | `response_format: {type: json_object}` plus a caller JSON instruction; optional local Pydantic validation |
+| Tools + JSON | Rejected; the modes are separate in MVP |
+| Other JSON schemas / `/beta` | Rejected |
+
+Only the explicitly configured model and the documented DeepSeek capability
+set are accepted. Requests cannot raise the configured output ceiling.
+Malformed replay, unsupported combinations and schema validators outside JSON
+mode are rejected before any send.
+
+Retries are bounded by `llm.max_retries` (0–5). Only timeouts, connection
+failures, HTTP 429, HTTP 408, transient upstream 5xx, and the documented blank
+JSON response are retried, with bounded backoff and a clamped `Retry-After`.
+Authentication failures, unsupported requests, other permanent 4xx responses,
+schema failures, and budget/ledger failures are never retried. The SDK client is
+constructed with its own retries disabled and redirect following disabled.
+
+### Usage ledger and budgets
+
+Accounting lives at `<state_dir>/metrics/llm-usage.jsonl` (default
+`.lean-weave/metrics/llm-usage.jsonl`). It is an append-only, versioned JSONL
+journal of reservation and terminal events. It stores counters, attribution,
+model names, status, duration, retry ordinal, and safe error codes only — never
+prompts, tool payloads, reasoning text, headers, or full responses.
+
+Before **each** send, including retries, the gateway reserves estimated input
+tokens plus the effective output cap. Admission is atomic across collectors for
+the same canonical journal through a process-shared file lock. A denied
+reservation sends nothing. Reservations left by a crash remain charged and are
+reported separately as unresolved.
+
+Measured provider counters are kept separate from local estimates. Missing
+optional cache/reasoning details do not make core usage incomplete. If the
+three core counters are valid and `total = input + output`, the reported total
+is the measured charge; otherwise the greater of the reservation and a known
+lower bound is charged conservatively. Cache-hit and reasoning counts are
+subsets of reported usage, never additions or deductions. An explicit zero is
+preserved; it is not treated as missing, and cache fallbacks are used only when
+the preferred count is unavailable, not when it is zero.
+
+The preflight estimate is intentionally conservative but local: it cannot
+guarantee exact provider billing when the provider has not yet reported usage.
+The compatibility `totals(feature_id)` view contains measured counters only;
+the richer `summary(feature_id)` view exposes presence/coverage, stage/model
+breakdowns, retry sends, elapsed attempt durations, unresolved reservations,
+and measured versus estimated budget charges.
+
+Only one logical writer set may target a journal. Writers are serialized by the
+same lock; lock or journal unavailability fails closed, and malformed,
+conflicting, orphaned, or partially written records are rejected rather than
+resetting spend.
+
+## Connection check
+
+`wl llm check` is the only ordinary command that dials DeepSeek. It sends one
+fixed, non-thinking, non-tool request capped at
+`min(llm.max_output_tokens, 32)`, forces zero gateway retries, uses the selected
+model and timeout, and attributes usage to the reserved probe feature. It does
+not accept prompts or tool input.
+
+```bash
+export DEEPSEEK_API_KEY=...   # environment only
+uv run wl llm check
+```
+
+It prints only a safe status, model name, and reported usage counts (or
+`usage=unavailable`); reply text is suppressed. Exit codes are 0 for success,
+1 for operational failure (including a missing key or exhausted budget), 3 for
+configuration failure, and 2 for argument errors. This is an opt-in,
+potentially billable smoke test; doctor and feature commands never invoke it.
 
 ## Logging and redaction
 
@@ -134,11 +231,18 @@ a required component is absent. `FeatureRequest`, `FeaturePlan`,
 `ImplementationTask`, `FeatureState`, `VerificationResult` and `TokenUsage`
 support Pydantic JSON serialization.
 
-## Not implemented in v1-02
+`create_llm_provider(context)` constructs the DeepSeek gateway on demand.
+An injected `llm_provider` always wins. Otherwise accounting comes from an
+injected attempt journal, an atomic `metrics_collector` slot, or the default
+JSONL ledger. A legacy collector that only implements `record_usage`/`totals`
+fails with `DependencyUnavailable` instead of silently bypassing budgets.
 
-No LLM calls, code editing, orchestration execution, LangGraph runtime,
-MCP/ACP clients, Docker orchestration, workers or background services.
-Architecture spikes remain optional validation tools, not the product runner.
+## Not implemented in v1-03
+
+No coding agent, LangGraph workflow runtime, generic multi-provider router,
+code editing, orchestration execution, MCP/ACP clients, Docker orchestration,
+background workers or services. Architecture spikes remain optional validation
+tools, not the product runner.
 
 ## See Also
 

@@ -14,9 +14,12 @@ def test_runtime_dependency_policy():
         re.split(r"[<>=!~;\[]", dep)[0].lower().replace("_", "-")
         for dep in project["project"]["dependencies"]
     }
+    # Narrow runtime exception: the DeepSeek gateway uses the OpenAI-compatible
+    # SDK. No other agent, MCP, Docker, or orchestration framework is allowed.
+    assert "openai" in names
     forbidden = {
         name for name in names
-        if name in {"langgraph", "mcp", "docker", "openai"}
+        if name in {"langgraph", "mcp", "docker"}
         or name.startswith(("mcp-", "docker-", "langgraph-"))
     }
     assert not forbidden, f"Forbidden runtime dependencies: {sorted(forbidden)}"

@@ -24,3 +24,27 @@ class ConfigError(LeanWeaveError):
 
 class DependencyUnavailable(LeanWeaveError):
     """Required injected implementation is unavailable."""
+
+
+class ProviderError(LeanWeaveError):
+    """Safe upstream provider or transport failure.
+
+    Messages must contain only a stable code and safe metadata, never SDK
+    exception text, prompts, headers, tool payloads, or reasoning content.
+    """
+
+
+class UnsupportedLLMRequest(ProviderError):
+    """The request asks for a mode or combination the gateway does not support."""
+
+
+class InvalidCompletionError(ProviderError):
+    """The provider returned a blank, malformed, or invalid structured result."""
+
+
+class BudgetExceededError(LeanWeaveError):
+    """Feature token budget admission denied an outbound request."""
+
+
+class JournalError(LeanWeaveError):
+    """Persistent usage accounting is unreadable, conflicting, or unwritable."""

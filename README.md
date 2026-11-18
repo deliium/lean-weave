@@ -2,7 +2,7 @@
 
 > Token-efficient AI coding pipeline — plan, implement, verify, and retry with structured state and minimal LLM tokens.
 
-lean-weave is building a single-process feature workflow using DeepSeek and deterministic local verification. **v1-02** provides the offline CLI, validated configuration, serializable models, and typed injection foundation; the production feature runner comes in later plans.
+lean-weave is building a single-process feature workflow using DeepSeek and deterministic local verification. **v1-03** adds the budgeted DeepSeek gateway, exact usage accounting in an atomic JSONL ledger, and an opt-in connection check; the production feature runner comes in later plans.
 
 ## Quick Start
 
@@ -10,6 +10,8 @@ lean-weave is building a single-process feature workflow using DeepSeek and dete
 uv sync
 uv run wl init
 uv run wl doctor
+# optional, potentially billable, requires an environment key:
+# uv run wl llm check
 ```
 
 The executable aliases are `wl` and `lean-weave`, both using the same app.
@@ -19,7 +21,7 @@ The executable aliases are `wl` and `lean-weave`, both using the same app.
 
 - **Structured state** — `FeatureState` / plan / tasks / verification; not full chat history
 - **Token-budget design** — stage-scoped context with digests, allowlists, and hard bans on secrets
-- **DeepSeek-ready** — OpenAI-compatible provider contract with thinking/tools/`reasoning_content` rules
+- **Budgeted DeepSeek gateway** — thinking/tools/JSON modes, bounded retries, per-feature budgets, measured-versus-estimated usage
 - **Orchestrator design** — deterministic state machine for MVP 1; LangGraph deferred after spike validation
 - **Deterministic verification design** — prefer compile/tests/schema checks over LLM review
 
@@ -48,6 +50,7 @@ uv run wl feature --help
 | [DESCRIPTION](.ai-factory/DESCRIPTION.md) | Purpose and stack |
 | [ARCHITECTURE](.ai-factory/ARCHITECTURE.md) | Boundaries, token strategy, ADRs |
 | [Plan v1-01](.ai-factory/plans/v1-01-architecture.md) | Architecture validation plan |
+| [Plan v1-03](.ai-factory/plans/v1-03-deepseek-gateway.md) | DeepSeek gateway and token metrics |
 
 ## MVP 1 exclusions
 

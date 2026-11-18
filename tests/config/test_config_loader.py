@@ -25,7 +25,11 @@ def test_default_file_and_ai_factory_ignored():
     assert load_config().source is None
     path = init_config()
     assert load_config().source == path
-    assert yaml.safe_load(dump_config(load_config().config))["version"] == 1
+    data = yaml.safe_load(dump_config(load_config().config))
+    assert data["version"] == 1
+    assert data["llm"]["max_retries"] == 2
+    assert data["llm"]["max_output_tokens"] == 1024
+    assert data["workflow"]["feature_token_budget"] == 20000
 
 
 def test_init_create_refuse_force_and_directory():

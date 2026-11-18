@@ -15,7 +15,8 @@ From the repository root:
 uv sync
 ```
 
-That installs runtime dependencies (Pydantic, Typer, Click, PyYAML) and pytest.
+That installs runtime dependencies (Pydantic, Typer, Click, PyYAML, and the
+OpenAI-compatible SDK used by the DeepSeek gateway) and pytest.
 Dependency acquisition may require a package index or a populated cache.
 
 ## First run
@@ -30,6 +31,22 @@ uv run wl feature --help
 `init` prints the new `.lean-weave/config.yaml` path; running it again refuses
 to overwrite without `--force`. Doctor reports local prerequisites; an absent
 API key is informational and does not prevent offline use.
+
+## Optional live DeepSeek check
+
+`wl llm check` is the only ordinary command that contacts DeepSeek. It sends a
+single small fixed request and is potentially billable. Set the environment key
+first; never place it in YAML:
+
+```bash
+export DEEPSEEK_API_KEY=...
+uv run wl llm check
+```
+
+The command prints only safe status, model, and reported usage metadata. It
+forces one attempt regardless of the configured retry ceiling. Live verification
+remains unverified when no real credentials or spend approval are available;
+offline verification is separate.
 
 The aliases `wl` and `lean-weave` invoke the same application. `aif` is not
 an executable. `lean_weave:main` is the canonical Python entrypoint.
@@ -49,11 +66,12 @@ uv run --offline --no-sync pytest
 ```
 
 Plain `uv sync` does not support full-suite collection: architecture spikes
-import optional packages. Test execution requires no API access. An autouse
-socket guard blocks IPv4/IPv6 connections unless a test explicitly carries
-`@pytest.mark.network`; no foundation test uses that marker. Unix sockets
-and subprocesses remain allowed. The guard only covers the pytest process,
-not child processes or collection-time imports.
+import optional packages. Test execution requires no API access. Gateway tests
+drive the real locked SDK through an in-memory HTTP transport; they never use a
+network marker. An autouse socket guard blocks IPv4/IPv6 connections unless a
+test explicitly carries `@pytest.mark.network`; no foundation or gateway test
+uses that marker. Unix sockets and subprocesses remain allowed. The guard only
+covers the pytest process, not child processes or collection-time imports.
 
 ## Logging
 

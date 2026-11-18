@@ -5,11 +5,11 @@
 lean-weave is a **single-process CLI pipeline** that plans, implements, verifies, and retries feature work using:
 
 - structured `FeatureState` (not chat history),
-- DeepSeek via `LLMProvider`,
+- DeepSeek via `LLMProvider` gateway (`DeepSeekProvider`),
 - stage-scoped `ContextProvider` budgets,
 - local `CodeExecutor` + deterministic `VerificationRunner`,
 - `StateStore` under `.lean-weave/`,
-- `MetricsCollector` for token counters.
+- `MetricsCollector` plus an atomic JSONL usage/budget ledger.
 
 Primary objective: **minimize LLM tokens** while keeping implementation quality.
 
@@ -53,9 +53,14 @@ Foundation modules: `config/` holds strict YAML models and safe file IO;
 and state containment currently use the working directory as the project root.
 
 `app.py` supplies a typed `AppContext` with optional injected Protocol
-implementations; no providers are constructed yet. `cli/` is the Typer
-dispatch/error boundary with offline init, config inspection, doctor, and
-help-only feature commands. Both `wl` and `lean-weave` use this single app;
+implementations. `create_llm_provider(context)` is the lazy DeepSeek
+construction seam: injected providers win, atomic journals are required, and
+nothing dials the network or opens the ledger until a gateway call is made.
+`providers/` holds `DeepSeekProvider` and the deterministic `MockLLMProvider`;
+`metrics/` holds typed usage records, conservative estimation, and the atomic
+JSONL journal. `cli/` is the Typer dispatch/error boundary with offline init,
+config inspection, doctor, help-only feature commands, and explicit
+`llm check`. Both `wl` and `lean-weave` use this single app;
 `lean_weave:main` remains the canonical Python entrypoint.
 
 ## ADRs

@@ -11,6 +11,7 @@ from lean_weave.cli.commands.config import config_app
 from lean_weave.cli.commands.doctor import doctor
 from lean_weave.cli.commands.feature import feature_app
 from lean_weave.cli.commands.init import initialize
+from lean_weave.cli.commands.llm import llm_app
 from lean_weave.cli.options import LogFormat
 
 log = get_logger("cli")
@@ -34,6 +35,7 @@ app.command("init")(initialize)
 app.command("doctor")(doctor)
 app.add_typer(config_app, name="config")
 app.add_typer(feature_app, name="feature")
+app.add_typer(llm_app, name="llm")
 
 
 @app.callback()

@@ -1,0 +1,788 @@
+"""DeepSeek gateway: one-attempt transport, validation, and accounting."""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import time
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import httpx2
+import openai
+from openai import OpenAI
+from pydantic import ValidationError
+
+from lean_weave.config.models import LLMConfig
+from lean_weave.contracts._types import (
+    PROBE_FEATURE_ID,
+    PROBE_STAGE,
+    GatewayStage,
+    LLMRequest,
+    LLMResponse,
+    ThinkingMode,
+)
+from lean_weave.errors import (
+    BudgetExceededError,
+    ConfigError,
+    InvalidCompletionError,
+    ProviderError,
+    UnsupportedLLMRequest,
+)
+from lean_weave.logging_setup import get_logger
+from lean_weave.metrics.budget import (
+    effective_output_cap,
+    estimate_request_tokens,
+    reservation_charge,
+)
+from lean_weave.metrics.models import (
+    AttemptJournal,
+    BudgetReservation,
+    ReportedUsage,
+    normalize_usage,
+)
+from lean_weave.schemas.models import TokenUsage
+
+log = get_logger("providers.deepseek")
+
+_MAX_RETRY_AFTER_S = 30.0
+_MAX_BACKOFF_S = 2.0
+_BASE_BACKOFF_S = 0.25
+_REASONING_EFFORTS = {"low", "medium", "high"}
+_VALID_STAGES = {"plan", "implement", "verify", "retry", "probe"}
+
+
+@dataclass(frozen=True)
+class ModelCapability:
+    supports_thinking: bool = True
+    supports_tools: bool = True
+    supports_json_object: bool = True
+
+
+#: Explicit local capability decision; no discovery call is made at runtime.
+MODEL_CAPABILITIES: dict[str, ModelCapability] = {
+    "deepseek-flash": ModelCapability(),
+    "deepseek-v4-pro": ModelCapability(),
+}
+
+
+@dataclass(frozen=True)
+class PreparedRequest:
+    feature_id: str
+    stage: GatewayStage
+    model: str
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]] | None
+    response_format: dict[str, Any] | None
+    result_model: type[Any] | None
+    thinking: ThinkingMode
+    reasoning_effort: str | None
+    output_cap: int
+    retry_limit: int
+
+
+@dataclass(frozen=True)
+class FailureClassification:
+    status: str
+    code: str
+    retryable: bool
+    retry_after: float | None = None
+
+
+class DeepSeekProvider:
+    """Synchronous DeepSeek chat-completion gateway.
+
+    The provider owns an SDK client only when it constructs one. A caller may
+    inject ``client`` (or an ``httpx2`` transport); injected clients are never
+    closed by this provider. Call ``close()`` or use the context manager to
+    release an owned client.
+    """
+
+    def __init__(
+        self,
+        config: LLMConfig,
+        journal: AttemptJournal,
+        *,
+        feature_token_budget: int = 20000,
+        client: OpenAI | None = None,
+        transport: httpx2.BaseTransport | None = None,
+        api_key: str | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+        id_factory: Callable[[], str] | None = None,
+    ) -> None:
+        if client is not None and transport is not None:
+            raise ValueError("inject either an SDK client or a transport, not both")
+        if feature_token_budget <= 0:
+            raise ValueError("feature token budget must be positive")
+        self._config = config
+        self._journal = journal
+        self._feature_token_budget = feature_token_budget
+        self._client = client
+        self._transport = transport
+        self._api_key = api_key
+        self._clock = clock
+        self._sleep = sleeper
+        self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
+        self._owned_client = False
+        self._owned_http = False
+        self._http_client: httpx2.Client | None = None
+
+    def __enter__(self) -> "DeepSeekProvider":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._owned_client and self._client is not None:
+            self._client.close()
+            self._client = None
+            self._owned_client = False
+        if self._owned_http and self._http_client is not None:
+            try:
+                self._http_client.close()
+            except Exception:  # noqa: BLE001 - best-effort release of an owned client
+                pass
+            self._http_client = None
+            self._owned_http = False
+
+    # -- transport setup -------------------------------------------------
+
+    def _ensure_client(self) -> OpenAI:
+        if self._client is not None:
+            return self._client
+        key = self._api_key if self._api_key is not None else os.getenv(self._config.api_key_env)
+        if not key:
+            raise ProviderError("API key is not configured")
+        if key in self._config.base_url:
+            raise ConfigError("Configuration field llm.base_url contains a secret value")
+        # The SDK default client enables redirects. Build an owned client for
+        # every construction path, not only for injected transports, so
+        # redirects stay disabled (including same-origin redirects).
+        try:
+            http_client = httpx2.Client(
+                transport=self._transport,
+                timeout=self._config.timeout_s,
+                follow_redirects=False,
+            )
+        except (TypeError, ValueError):
+            raise ProviderError("Cannot initialize the provider client") from None
+        self._http_client = http_client
+        self._owned_http = True
+        try:
+            self._client = OpenAI(
+                api_key=key,
+                base_url=self._config.base_url,
+                timeout=self._config.timeout_s,
+                max_retries=0,
+                http_client=http_client,
+            )
+        except (TypeError, ValueError):
+            http_client.close()
+            self._http_client = None
+            self._owned_http = False
+            raise ProviderError("Cannot initialize the provider client") from None
+        self._owned_client = True
+        log.debug("[FIX] provider client sdk_retries=0 follow_redirects=disabled")
+        return self._client
+
+    # -- request validation ----------------------------------------------
+
+    def _prepare(self, request: LLMRequest) -> PreparedRequest:
+        feature_id = request.get("feature_id")
+        if not isinstance(feature_id, str) or not feature_id.strip():
+            raise UnsupportedLLMRequest("A non-empty feature ID is required")
+        stage = request.get("stage")
+        if not isinstance(stage, str) or stage not in _VALID_STAGES:
+            raise UnsupportedLLMRequest("A supported gateway stage is required")
+        self._validate_attribution(feature_id, stage)
+
+        model = request.get("model") or self._config.model
+        if not isinstance(model, str) or not model.strip():
+            raise UnsupportedLLMRequest("A non-empty model is required")
+        capability = MODEL_CAPABILITIES.get(model)
+        if capability is None:
+            raise UnsupportedLLMRequest("Unsupported model")
+
+        options = request.get("options") or {}
+        if not isinstance(options, Mapping):
+            raise UnsupportedLLMRequest("Gateway options must be a mapping")
+
+        thinking = self._thinking_mode(request, options, capability)
+        reasoning_effort = request.get("reasoning_effort")
+        if reasoning_effort is not None:
+            if not isinstance(reasoning_effort, str) or reasoning_effort not in _REASONING_EFFORTS:
+                raise UnsupportedLLMRequest("Unsupported reasoning effort")
+            if thinking != "enabled":
+                raise UnsupportedLLMRequest("Reasoning effort requires thinking mode")
+
+        response_format, result_model = self._structured_mode(request)
+        tools = request.get("tools")
+        if tools is not None:
+            if not capability.supports_tools:
+                raise UnsupportedLLMRequest("Model does not support tools")
+            tools = self._validate_tools(tools)
+        if tools is not None and response_format is not None:
+            raise UnsupportedLLMRequest("Tools and JSON object mode cannot be combined")
+        if response_format is not None and not capability.supports_json_object:
+            raise UnsupportedLLMRequest("Model does not support JSON object mode")
+
+        messages = self._validate_messages(request.get("messages"), thinking, tools is not None)
+        output_cap = self._output_cap(request, options)
+        retry_limit = self._retry_limit(options)
+
+        return PreparedRequest(
+            feature_id=feature_id,
+            stage=stage,
+            model=model,
+            messages=messages,
+            tools=tools,
+            response_format=response_format,
+            result_model=result_model,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort if thinking == "enabled" else None,
+            output_cap=output_cap,
+            retry_limit=retry_limit,
+        )
+
+    @staticmethod
+    def _validate_attribution(feature_id: str, stage: str) -> None:
+        if stage == PROBE_STAGE and feature_id != PROBE_FEATURE_ID:
+            raise UnsupportedLLMRequest("Probe requests require the reserved probe feature ID")
+        if feature_id == PROBE_FEATURE_ID and stage != PROBE_STAGE:
+            raise UnsupportedLLMRequest("The reserved probe feature ID cannot use a workflow stage")
+
+    def _thinking_mode(
+        self, request: LLMRequest, options: Mapping[str, Any], capability: ModelCapability
+    ) -> ThinkingMode:
+        selected = options.get("thinking")
+        if selected is None:
+            selected = request.get("thinking")
+        if selected is None:
+            selected = "enabled" if self._config.thinking else "disabled"
+        if selected not in {"enabled", "disabled"}:
+            raise UnsupportedLLMRequest("Unsupported thinking mode")
+        if selected == "enabled" and not capability.supports_thinking:
+            raise UnsupportedLLMRequest("Model does not support thinking mode")
+        return selected
+
+    def _structured_mode(
+        self, request: LLMRequest
+    ) -> tuple[dict[str, Any] | None, type[Any] | None]:
+        response_format = request.get("response_format")
+        result_model = request.get("result_model")
+        if result_model is not None and (
+            not isinstance(result_model, type) or not hasattr(result_model, "model_validate")
+        ):
+            raise UnsupportedLLMRequest("Result validator must be a Pydantic model class")
+        if response_format is None:
+            if result_model is not None:
+                raise UnsupportedLLMRequest("A result validator requires JSON object mode")
+            return None, None
+        if not isinstance(response_format, Mapping):
+            raise UnsupportedLLMRequest("Unsupported response format")
+        if response_format.get("type") != "json_object" or set(response_format) != {"type"}:
+            raise UnsupportedLLMRequest("Only JSON object mode is supported")
+        return {"type": "json_object"}, result_model
+
+    @staticmethod
+    def _validate_tools(tools: Any) -> list[dict[str, Any]] | None:
+        if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
+            raise UnsupportedLLMRequest("Tools must be a sequence")
+        if not tools:
+            return None
+        normalized: list[dict[str, Any]] = []
+        for tool in tools:
+            if not isinstance(tool, Mapping) or tool.get("type") != "function":
+                raise UnsupportedLLMRequest("Only function tools are supported")
+            function = tool.get("function")
+            if not isinstance(function, Mapping):
+                raise UnsupportedLLMRequest("Function tool schema is malformed")
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise UnsupportedLLMRequest("Function tool name is required")
+            normalized.append(copy.deepcopy(dict(tool)))
+        return normalized
+
+    @staticmethod
+    def _validate_messages(
+        messages: Any, thinking: ThinkingMode, has_tools: bool
+    ) -> list[dict[str, Any]]:
+        if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)) or not messages:
+            raise UnsupportedLLMRequest("Explicit, non-empty messages are required")
+        normalized: list[dict[str, Any]] = []
+        call_ids: set[str] = set()
+        for message in messages:
+            if not isinstance(message, Mapping):
+                raise UnsupportedLLMRequest("Messages must be mappings")
+            role = message.get("role")
+            if role not in {"system", "user", "assistant", "tool"}:
+                raise UnsupportedLLMRequest("Unsupported message role")
+            content = message.get("content")
+            if content is not None and not isinstance(content, str):
+                raise UnsupportedLLMRequest("Message content must be text or null")
+            item: dict[str, Any] = {"role": role, "content": content}
+            reasoning = message.get("reasoning_content")
+            if reasoning is not None and not isinstance(reasoning, str):
+                raise UnsupportedLLMRequest("Reasoning content must be text")
+            if role == "assistant":
+                tool_calls = message.get("tool_calls")
+                if tool_calls is not None:
+                    calls = DeepSeekProvider._normalize_tool_calls(tool_calls)
+                    item["tool_calls"] = calls
+                    if thinking == "enabled" and not isinstance(reasoning, str):
+                        raise UnsupportedLLMRequest(
+                            "Thinking tool replay requires prior reasoning content"
+                        )
+                    for call in calls:
+                        call_ids.add(call["id"])
+                if thinking == "enabled" and reasoning is not None:
+                    item["reasoning_content"] = reasoning
+            elif role == "tool":
+                tool_call_id = message.get("tool_call_id")
+                if not isinstance(tool_call_id, str) or not tool_call_id:
+                    raise UnsupportedLLMRequest("Tool messages require a tool call ID")
+                if thinking == "enabled" and has_tools and tool_call_id not in call_ids:
+                    raise UnsupportedLLMRequest("Tool result has no matching assistant tool call")
+                item["tool_call_id"] = tool_call_id
+            elif reasoning is not None:
+                # Reasoning is an assistant in-flight field only.
+                raise UnsupportedLLMRequest("Reasoning content is only valid on assistant messages")
+            normalized.append(item)
+
+        if thinking == "enabled" and has_tools:
+            tool_ids = {
+                item["tool_call_id"]
+                for item in normalized
+                if item.get("role") == "tool" and "tool_call_id" in item
+            }
+            if not call_ids.issubset(tool_ids):
+                raise UnsupportedLLMRequest("Thinking tool replay requires matching tool results")
+        return normalized
+
+    @staticmethod
+    def _normalize_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
+        if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)):
+            raise UnsupportedLLMRequest("Assistant tool calls must be a sequence")
+        normalized: list[dict[str, Any]] = []
+        for call in tool_calls:
+            if not isinstance(call, Mapping):
+                raise UnsupportedLLMRequest("Assistant tool call is malformed")
+            identifier = call.get("id")
+            function = call.get("function")
+            if not isinstance(identifier, str) or not identifier:
+                raise UnsupportedLLMRequest("Assistant tool call ID is required")
+            if not isinstance(function, Mapping):
+                raise UnsupportedLLMRequest("Assistant tool call function is malformed")
+            name = function.get("name")
+            arguments = function.get("arguments")
+            if not isinstance(name, str) or not name:
+                raise UnsupportedLLMRequest("Assistant tool call name is required")
+            if isinstance(arguments, Mapping):
+                arguments = json.dumps(arguments, separators=(",", ":"))
+            if not isinstance(arguments, str):
+                raise UnsupportedLLMRequest("Assistant tool call arguments must be text")
+            normalized.append(
+                {
+                    "id": identifier,
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                }
+            )
+        return normalized
+
+    def _output_cap(self, request: LLMRequest, options: Mapping[str, Any]) -> int:
+        requested_values = [
+            value
+            for value in (request.get("max_output_tokens"), options.get("max_output_tokens"))
+            if value is not None
+        ]
+        for value in requested_values:
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise UnsupportedLLMRequest("Output token override must be a positive integer")
+            if value > self._config.max_output_tokens:
+                raise UnsupportedLLMRequest("Output token override exceeds the configured ceiling")
+        requested = min(requested_values) if requested_values else None
+        try:
+            return effective_output_cap(requested, self._config.max_output_tokens)
+        except ValueError:
+            raise UnsupportedLLMRequest("Invalid output token limit") from None
+
+    def _retry_limit(self, options: Mapping[str, Any]) -> int:
+        selected = options.get("retry_limit")
+        if selected is None:
+            return self._config.max_retries
+        if isinstance(selected, bool) or not isinstance(selected, int) or selected < 0:
+            raise UnsupportedLLMRequest("Retry override must be a non-negative integer")
+        # The option may only tighten the configured retry ceiling.
+        if selected > self._config.max_retries:
+            raise UnsupportedLLMRequest("Retry override exceeds the configured ceiling")
+        return selected
+
+    # -- invocation ------------------------------------------------------
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        prepared = self._prepare(request)
+        client = self._ensure_client()
+        request_id = self._id_factory()
+        wire = self._wire_request(prepared)
+        estimated_input = estimate_request_tokens(
+            messages=wire["messages"],
+            tools=wire.get("tools"),
+            response_format=wire.get("response_format"),
+            extra=wire.get("extra_body"),
+        )
+        log.debug(
+            "[DeepSeek.request] stage=%s feature=%s model=%s messages=%s tools=%s json=%s thinking=%s retries=%s",
+            prepared.stage,
+            prepared.feature_id,
+            prepared.model,
+            len(prepared.messages),
+            len(prepared.tools or []),
+            prepared.response_format is not None,
+            prepared.thinking,
+            prepared.retry_limit,
+        )
+
+        attempt_ordinal = 0
+        while True:
+            attempt_id = f"{request_id}-a{attempt_ordinal}"
+            reservation = self._journal.reserve_attempt(
+                feature_id=prepared.feature_id,
+                stage=prepared.stage,
+                model_requested=prepared.model,
+                request_id=request_id,
+                attempt_id=attempt_id,
+                attempt_ordinal=attempt_ordinal,
+                estimated_input_tokens=estimated_input,
+                output_cap=prepared.output_cap,
+                budget_tokens=self._feature_token_budget,
+            )
+            log.debug(
+                "[DeepSeek.attempt] attempt=%s ordinal=%s reserved=%s",
+                attempt_id,
+                attempt_ordinal,
+                reservation.charge_tokens,
+            )
+            started = self._clock()
+            try:
+                response = client.chat.completions.create(**wire)
+            except openai.OpenAIError as exc:
+                duration_ms = self._duration_ms(started)
+                usage = self._usage_from_error(exc)
+                self._warn_incomplete_usage(attempt_id, usage)
+                failure = self._classify_error(exc)
+                self._journal.finalize_attempt(
+                    reservation,
+                    status=failure.status,
+                    usage=usage,
+                    model_returned=self._model_from_error(exc),
+                    duration_ms=duration_ms,
+                    error_code=failure.code,
+                )
+                log.warning(
+                    "[DeepSeek.attempt] failed attempt=%s code=%s retryable=%s usage=%s",
+                    attempt_id,
+                    failure.code,
+                    failure.retryable,
+                    usage is not None,
+                )
+                if failure.retryable and attempt_ordinal < prepared.retry_limit:
+                    delay = self._backoff(attempt_ordinal, failure.retry_after)
+                    log.info(
+                        "[DeepSeek.retry] attempt=%s delay=%.3f retries_remaining=%s",
+                        attempt_id,
+                        delay,
+                        prepared.retry_limit - attempt_ordinal,
+                    )
+                    self._sleep(delay)
+                    attempt_ordinal += 1
+                    continue
+                raise ProviderError(f"Provider request failed: {failure.code}") from None
+
+            duration_ms = self._duration_ms(started)
+            usage = self._usage_from_response(response)
+            self._warn_incomplete_usage(attempt_id, usage)
+            finish_reason = self._finish_reason(response)
+            try:
+                message, structured = self._parse_response(prepared, response)
+            except InvalidCompletionError as exc:
+                self._journal.finalize_attempt(
+                    reservation,
+                    status="invalid",
+                    usage=usage,
+                    model_returned=self._response_model(response),
+                    duration_ms=duration_ms,
+                    finish_reason=finish_reason,
+                    error_code=getattr(exc, "code", "invalid_completion"),
+                )
+                log.warning(
+                    "[DeepSeek.attempt] invalid attempt=%s code=%s usage=%s",
+                    attempt_id,
+                    getattr(exc, "code", "invalid_completion"),
+                    usage is not None,
+                )
+                if (
+                    getattr(exc, "code", "") == "blank_json"
+                    and attempt_ordinal < prepared.retry_limit
+                ):
+                    delay = self._backoff(attempt_ordinal, None)
+                    log.info(
+                        "[DeepSeek.retry] attempt=%s delay=%.3f reason=blank_json",
+                        attempt_id,
+                        delay,
+                    )
+                    self._sleep(delay)
+                    attempt_ordinal += 1
+                    continue
+                raise
+
+            self._journal.finalize_attempt(
+                reservation,
+                status="success",
+                usage=usage,
+                model_returned=self._response_model(response),
+                duration_ms=duration_ms,
+                finish_reason=finish_reason,
+            )
+            log.info(
+                "[DeepSeek.attempt] success attempt=%s duration_ms=%s usage=%s",
+                attempt_id,
+                duration_ms,
+                usage is not None,
+            )
+            spent = getattr(self._journal, "spent", None)
+            if callable(spent) and spent(prepared.feature_id) > self._feature_token_budget:
+                raise BudgetExceededError("Feature token budget was exceeded after completion")
+            counters = usage.counters if usage is not None else None
+            return LLMResponse(
+                message=message,
+                usage=TokenUsage(
+                    prompt_tokens=counters.input_tokens or 0 if counters else 0,
+                    completion_tokens=counters.output_tokens or 0 if counters else 0,
+                    total_tokens=(counters.measured_total() or 0) if counters else 0,
+                    reasoning_tokens=counters.reasoning_tokens or 0 if counters else 0,
+                    prompt_cache_hit_tokens=counters.cache_hit_tokens or 0 if counters else 0,
+                ),
+                raw_finish_reason=finish_reason,
+                model=self._response_model(response),
+                usage_reported=usage is not None,
+                structured=structured,
+            )
+
+    def _wire_request(self, prepared: PreparedRequest) -> dict[str, Any]:
+        wire: dict[str, Any] = {
+            "model": prepared.model,
+            "messages": prepared.messages,
+            "max_tokens": prepared.output_cap,
+            "extra_body": {"thinking": {"type": prepared.thinking}},
+        }
+        if prepared.tools is not None:
+            wire["tools"] = prepared.tools
+        if prepared.response_format is not None:
+            wire["response_format"] = prepared.response_format
+        if prepared.reasoning_effort is not None:
+            wire["reasoning_effort"] = prepared.reasoning_effort
+        return wire
+
+    # -- response handling ----------------------------------------------
+
+    def _parse_response(
+        self, prepared: PreparedRequest, response: Any
+    ) -> tuple[dict[str, Any], Mapping[str, Any] | None]:
+        choices = getattr(response, "choices", None)
+        if not choices:
+            raise InvalidCompletionError("Provider returned no completion choices")
+        choice = choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        message = getattr(choice, "message", None)
+        if message is None:
+            raise InvalidCompletionError("Provider returned no message")
+        if finish_reason == "length":
+            error = InvalidCompletionError("Provider output was truncated")
+            error.code = "truncated"  # type: ignore[attr-defined]
+            raise error
+
+        content = getattr(message, "content", None)
+        tool_calls = self._message_tool_calls(message)
+        normalized_message: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            normalized_message["tool_calls"] = tool_calls
+        reasoning = getattr(message, "reasoning_content", None)
+        if isinstance(reasoning, str):
+            normalized_message["reasoning_content"] = reasoning
+        if not tool_calls and (not isinstance(content, str) or not content.strip()):
+            if prepared.response_format is not None:
+                error = InvalidCompletionError("Provider returned blank JSON content")
+                error.code = "blank_json"  # type: ignore[attr-defined]
+                raise error
+            raise InvalidCompletionError("Provider returned an empty message")
+
+        if prepared.response_format is None:
+            return normalized_message, None
+
+        try:
+            decoded = json.loads(content if isinstance(content, str) else "")
+        except (json.JSONDecodeError, TypeError):
+            error = InvalidCompletionError("Provider JSON content is malformed")
+            error.code = "malformed_json"  # type: ignore[attr-defined]
+            raise error from None
+        if not isinstance(decoded, dict):
+            error = InvalidCompletionError("Provider JSON content is not an object")
+            error.code = "non_object"  # type: ignore[attr-defined]
+            raise error from None
+        if prepared.result_model is not None:
+            try:
+                validated = prepared.result_model.model_validate(decoded)
+            except ValidationError:
+                error = InvalidCompletionError("Provider JSON content failed schema validation")
+                error.code = "schema_invalid"  # type: ignore[attr-defined]
+                raise error from None
+            structured = validated.model_dump(mode="json")
+        else:
+            structured = decoded
+        return normalized_message, structured
+
+    @staticmethod
+    def _message_tool_calls(message: Any) -> list[dict[str, Any]] | None:
+        calls = getattr(message, "tool_calls", None)
+        if not calls:
+            return None
+        normalized: list[dict[str, Any]] = []
+        for call in calls:
+            function = getattr(call, "function", None)
+            identifier = getattr(call, "id", None)
+            if not identifier or function is None:
+                raise InvalidCompletionError("Provider returned a malformed tool call")
+            arguments = getattr(function, "arguments", "")
+            normalized.append(
+                {
+                    "id": identifier,
+                    "type": "function",
+                    "function": {
+                        "name": getattr(function, "name", ""),
+                        "arguments": arguments if isinstance(arguments, str) else "",
+                    },
+                }
+            )
+        return normalized
+
+    @staticmethod
+    def _finish_reason(response: Any) -> str | None:
+        try:
+            return response.choices[0].finish_reason
+        except (AttributeError, IndexError, TypeError):
+            return None
+
+    @staticmethod
+    def _response_model(response: Any) -> str | None:
+        model = getattr(response, "model", None)
+        if isinstance(model, str) and model:
+            return model[:256]
+        return None
+
+    @staticmethod
+    def _usage_from_response(response: Any) -> ReportedUsage | None:
+        usage = getattr(response, "usage", None)
+        return _normalize_sdk_usage(usage)
+
+    @staticmethod
+    def _usage_from_error(exc: openai.OpenAIError) -> ReportedUsage | None:
+        body = getattr(exc, "body", None)
+        usage = body.get("usage") if isinstance(body, Mapping) else None
+        if usage is None:
+            response = getattr(exc, "response", None)
+            if response is not None:
+                try:
+                    decoded = response.json()
+                except Exception:  # noqa: BLE001 - error body is best effort only
+                    decoded = None
+                if isinstance(decoded, Mapping):
+                    usage = decoded.get("usage")
+        return _normalize_sdk_usage(usage)
+
+    @staticmethod
+    def _model_from_error(exc: openai.OpenAIError) -> str | None:
+        body = getattr(exc, "body", None)
+        if isinstance(body, Mapping):
+            model = body.get("model")
+            if isinstance(model, str) and model:
+                return model[:256]
+        return None
+
+    @staticmethod
+    def _classify_error(exc: openai.OpenAIError) -> FailureClassification:
+        if isinstance(exc, openai.APITimeoutError):
+            return FailureClassification("error", "timeout", True)
+        if isinstance(exc, openai.APIConnectionError):
+            return FailureClassification("error", "connection", True)
+        status_code = getattr(exc, "status_code", None)
+        retry_after = _retry_after(getattr(exc, "response", None))
+        if status_code == 429:
+            return FailureClassification("error", "rate_limited", True, retry_after)
+        if status_code == 408 or (isinstance(status_code, int) and status_code >= 500):
+            return FailureClassification("error", "upstream_unavailable", True, retry_after)
+        if isinstance(exc, openai.APIResponseValidationError):
+            return FailureClassification("invalid", "invalid_response", False)
+        if isinstance(status_code, int) and 400 <= status_code < 500:
+            return FailureClassification("error", "rejected_request", False)
+        return FailureClassification("error", "provider_error", False)
+
+    def _duration_ms(self, started: float) -> int:
+        return max(0, int((self._clock() - started) * 1000))
+
+    @staticmethod
+    def _warn_incomplete_usage(attempt_id: str, usage: ReportedUsage | None) -> None:
+        if usage is not None and not usage.counters.core_complete():
+            log.warning(
+                "[DeepSeek.attempt] incomplete_usage attempt=%s measured=false",
+                attempt_id,
+            )
+
+    @staticmethod
+    def _backoff(attempt_ordinal: int, retry_after: float | None) -> float:
+        delay = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2**attempt_ordinal))
+        if retry_after is not None:
+            delay = max(delay, min(_MAX_RETRY_AFTER_S, retry_after))
+        return delay
+
+
+def _normalize_sdk_usage(usage: Any) -> ReportedUsage | None:
+    if usage is None:
+        return None
+    if isinstance(usage, Mapping):
+        raw: Any = dict(usage)
+    elif hasattr(usage, "model_dump"):
+        try:
+            raw = usage.model_dump(exclude_none=False)
+            extras = getattr(usage, "model_extra", None)
+            if isinstance(extras, Mapping):
+                raw.update(extras)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    return normalize_usage(raw)
+
+
+def _retry_after(response: Any) -> float | None:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get("retry-after")
+    except (AttributeError, TypeError):
+        return None
+    if value is None:
+        return None
+    try:
+        delay = float(value)
+    except (TypeError, ValueError):
+        return None
+    if delay < 0:
+        return None
+    return delay

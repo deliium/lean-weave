@@ -10,6 +10,7 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 
 - **Structured state**, not chat logs — `FeatureState`, `FeaturePlan`, tasks, `VerificationResult`
 - **DeepSeek** as the MVP LLM (OpenAI-compatible API) with explicit thinking / tools / `reasoning_content` handling
+- **Budgeted gateway** — each outbound attempt reserves estimated input plus output cap in an atomic JSONL ledger; measured usage and local estimates stay separate
 - **Minimal state machine** orchestrator for MVP 1; LangGraph interrupt/checkpoint capabilities were validated in spikes and **deferred**
 - **Deterministic verification** (compile / tests / schema / file checks) preferred over LLM review
 - **Stage-scoped context** with hard bans on secrets, full skill trees, and cross-stage transcripts
@@ -43,10 +44,10 @@ Methodology from `aif-plan` / `aif-implement` / `aif-verify` is reused as **arti
 ## Package layout (target)
 
 ```text
-src/lean_weave/   # cli, providers, context, orchestrator, … (schemas/contracts exist)
+src/lean_weave/   # cli, providers, metrics, context, orchestrator, … (schemas/contracts exist)
 spikes/           # bounded probes — not production CLI
-tests/            # spikes / schemas / contracts
-.lean-weave/      # runtime FeatureState (gitignored)
+tests/            # spikes / schemas / contracts / providers / metrics / cli
+.lean-weave/      # runtime FeatureState and metrics ledger (gitignored)
 .ai-factory/      # DESCRIPTION, ARCHITECTURE, plans, ADRs, references
 docs/             # human docs
 ```

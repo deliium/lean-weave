@@ -4,7 +4,11 @@ import os
 import typer
 import yaml
 
-from lean_weave.logging_setup import get_logger
+from lean_weave.logging_setup import (
+    SecretRedactionFilter,
+    get_logger,
+    redact_console_message,
+)
 from lean_weave.cli.runtime import command_context
 from lean_weave.cli.options import OutputFormat
 
@@ -21,7 +25,13 @@ def show(
     data = context.config.model_dump(mode="json")
     data["api_key_present"] = bool(os.getenv(context.config.llm.api_key_env))
     if format == "json":
-        typer.echo(json.dumps(data))
+        rendered = json.dumps(data)
     else:
-        typer.echo(yaml.safe_dump(data, sort_keys=False), nl=False)
+        rendered = yaml.safe_dump(data, sort_keys=False)
+    # Configuration strings are operator input; redact known secret values even
+    # when they were embedded in a URL or another field.
+    configured = SecretRedactionFilter(
+        ("DEEPSEEK_API_KEY", context.config.llm.api_key_env)
+    ).redact(redact_console_message(rendered))
+    typer.echo(configured, nl=format != "yaml")
     get_logger("cli").info("[CLI.config.show] exit_code=0")

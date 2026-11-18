@@ -5,9 +5,9 @@
 ## Milestones
 
 - [x] **Architecture and technical validation (v1-01)** — Contracts, schemas, spikes, ADRs, isolation, MVP 1 acceptance gate
-- [ ] **Git bootstrap** — Initialize repository, baseline ignore/hygiene, first commits of architecture artifacts
+- [x] **Git bootstrap** — Initialize repository, baseline ignore/hygiene, first commits of architecture artifacts
 - [ ] **Core StateStore + MetricsCollector** — Persist FeatureState under `.lean-weave/`; token/usage counters only (no chat history)
-- [ ] **LLMProvider (DeepSeek)** — Thinking/tools/`reasoning_content` echo, JSON mode caveats, usage fields; live probe when key available
+- [x] **LLMProvider (DeepSeek)** — Thinking/tools/`reasoning_content` echo, JSON mode caveats, usage fields; live probe when key available
 - [ ] **ContextProvider** — Stage-scoped budgets, digests, allowlists; ban secrets/skill trees/cross-stage transcripts
 - [ ] **Minimal WorkflowOrchestrator** — plan → implement → verify → retry/interrupt/resume on FeatureState (LangGraph remains deferred)
 - [ ] **CodeExecutor + VerificationRunner** — Subprocess cwd jail; deterministic compile/test/schema gates (no LLM verify in MVP)
@@ -21,3 +21,5 @@
 | Milestone | Date |
 |-----------|------|
 | Architecture and technical validation (v1-01) | 2026-11-08 |
+| Git bootstrap | 2026-11-18 |
+| LLMProvider (DeepSeek) | 2026-11-18 |
