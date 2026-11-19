@@ -140,6 +140,13 @@ def test_limit_truncates(search_repo, monkeypatch):
     assert result.truncated is True
 
 
+def test_path_filter_applies_before_limit(search_repo, monkeypatch):
+    _force_python(monkeypatch)
+    result = search(search_repo, "alpha", limit=1, paths=["u.py"])
+    assert [(hit.path, hit.line) for hit in result.hits] == [("u.py", 1)]
+    assert result.truncated is False
+
+
 @pytest.mark.parametrize("query", ["", "a\nb", "a\x00b"])
 def test_invalid_query(search_repo, query):
     with pytest.raises(InvalidContextRequest):

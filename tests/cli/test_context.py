@@ -103,6 +103,18 @@ def test_search_forbidden_path(files):
     assert "not available" in result.stderr
 
 
+def test_search_path_filter_applies_before_limit(files):
+    (files / "aaa.py").write_text("helper\nhelper\n")
+    result = invoke(
+        "context", "search", "helper", "--path", "pkg/core.py", "--limit", "1", "--json"
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["hits"]
+    assert all(hit["path"] == "pkg/core.py" for hit in data["hits"])
+    assert data["truncated"] is False
+
+
 def test_build_symbols_and_provenance(files):
     result = invoke("context", "build", "helper", "--path", "pkg/core.py", "--json")
     assert result.exit_code == 0, result.output
@@ -147,6 +159,26 @@ def test_build_full_requires_path_and_reason(files):
     )
     assert ok.exit_code == 0, ok.output
     assert json.loads(ok.stdout)["excerpts"][0]["kind"] == "full"
+
+
+def test_build_empty_full_file_reports_omission(files):
+    (files / "pkg" / "empty.py").write_text("")
+    result = invoke(
+        "context",
+        "build",
+        "empty",
+        "--level",
+        "full",
+        "--path",
+        "pkg/empty.py",
+        "--reason",
+        "review the complete file",
+        "--json",
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["excerpts"] == []
+    assert any(item["reason"] == "empty" for item in data["omissions"])
 
 
 def test_build_invalid_level_and_forbidden_path(files):
@@ -208,11 +240,12 @@ def test_human_output_escapes_terminal_controls(files):
 def test_secret_canary_never_reaches_output_or_logs(files, caplog):
     canary = "sk-" + "b" * 32
     (files / "pkg" / "leak.py").write_text(f"KEY = '{canary}'\n")
-    result = invoke("context", "build", "leak")
+    result = invoke("context", "build", "leak", "--json")
     assert result.exit_code == 0, result.output
     assert canary not in result.output
     assert canary not in result.stderr
     assert canary not in caplog.text
+    assert "leak.py" not in result.stdout
 
 
 def test_exported_main_context_search(files, capsys):

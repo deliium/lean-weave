@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from lean_weave.context.policy import contains_secret
 from lean_weave.errors import ForbiddenContext, InvalidContextRequest
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -59,6 +60,7 @@ class OmissionReason(str, Enum):
     NO_RECENCY = "no_recency"
     STAGE_SCOPE = "stage_scope"
     INVALID_RANGE = "invalid_range"
+    EMPTY = "empty"
 
 
 class _Model(BaseModel):
@@ -110,9 +112,6 @@ def validate_text(value: str, *, what: str = "task text") -> str:
         raise InvalidContextRequest(f"{what.capitalize()} must be non-empty")
     if "\x00" in value or _CONTROL.search(value):
         raise InvalidContextRequest(f"{what.capitalize()} contains control characters")
-    # Imported lazily to keep the pure models module import-light.
-    from lean_weave.context.policy import contains_secret
-
     if contains_secret(value):
         raise ForbiddenContext(f"{what.capitalize()} was rejected by the credential filter")
     return value

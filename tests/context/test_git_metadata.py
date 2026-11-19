@@ -44,6 +44,14 @@ def test_recent_commits_are_ordered(project: Path):
     assert metadata.recent["a.py"] == 1
 
 
+def test_uncommitted_changes_outrank_committed_positions(project: Path):
+    write_files(project, {"a.py": "x = 1\n"})
+    init_git(project)
+    (project / "a.py").write_text("x = 2\n")
+    metadata = read_git_metadata(Repository(project))
+    assert metadata.recent["a.py"] == -1
+
+
 def test_unsafe_filter_configuration_skips_signal(project: Path):
     write_files(project, {"a.py": "x = 1\n"})
     init_git(project)

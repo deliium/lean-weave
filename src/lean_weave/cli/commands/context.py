@@ -8,7 +8,6 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
-from lean_weave.cli.options import OutputFormat  # noqa: F401  (shared option alias)
 from lean_weave.cli.runtime import command_context
 from lean_weave.context.builder import ContextBuilder
 from lean_weave.context.models import (
@@ -135,8 +134,13 @@ def search_command(
         log.info("[CLI.context.search] mode=symbol hits=%s", len(matches))
         return
 
-    result = literal_search(repository, _guard(query, what="Search query"), limit=limit)
-    hits = [hit for hit in result.hits if selected_path is None or hit.path == selected_path]
+    result = literal_search(
+        repository,
+        _guard(query, what="Search query"),
+        limit=limit,
+        paths=[selected_path] if selected_path is not None else None,
+    )
+    hits = result.hits
     payload = {
         "command": "search",
         "mode": "literal",

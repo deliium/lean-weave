@@ -120,6 +120,22 @@ def test_implement_reads_only_scope_and_respects_testing_flag(
     assert "tests/test_a.py" not in set(reads)
 
 
+def test_implement_emits_matching_tests_and_scopes_map(provider_project: Path):
+    provider = DeterministicContextProvider(provider_project)
+    bundle = provider.build("implement", _state(Stage.IMPLEMENT, testing=True))
+    assert "tests/test_a.py" in bundle["file_excerpts"]
+    assert all("noise.py" not in line for line in bundle["pack"].repository_map)
+    assert all("tests/test_a.py" in line or "pkg/" in line for line in bundle["pack"].repository_map)
+
+
+def test_implement_map_excludes_tests_when_disabled(provider_project: Path):
+    provider = DeterministicContextProvider(provider_project)
+    bundle = provider.build("implement", _state(Stage.IMPLEMENT, testing=False))
+    assert "tests/test_a.py" not in bundle["file_excerpts"]
+    assert all("tests/test_a.py" not in line for line in bundle["pack"].repository_map)
+    assert all("noise.py" not in line for line in bundle["pack"].repository_map)
+
+
 def test_implement_requires_unique_active_task(provider_project: Path):
     provider = DeterministicContextProvider(provider_project)
     state = _state(Stage.IMPLEMENT)

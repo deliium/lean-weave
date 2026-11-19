@@ -265,6 +265,10 @@ def read_git_metadata(repository: Repository, *, recent_commits: int | None = No
         elif commits_result is not None and commits_result[0] != 0:
             log.debug("[Context.git] recent history unavailable (unborn or unreadable)")
 
+    # Working-tree changes are more recent than any committed position.
+    for path in changed:
+        recent[path] = -1
+
     metadata = GitMetadata(
         available=True,
         root=str(root),

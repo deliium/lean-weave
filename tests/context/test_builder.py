@@ -200,3 +200,80 @@ def test_unicode_round_trip(rich_repo: Path):
     )
     assert "é" in result.user_prompt
     assert result.pack.estimated_tokens == estimate_tokens(result.messages)
+
+
+def test_empty_full_file_reports_stable_omission(project: Path):
+    write_files(project, {"empty.py": ""})
+    result = _build(
+        project,
+        ContextQuery(
+            task="empty",
+            level=ExpansionLevel.FULL,
+            paths=["empty.py"],
+            reason="review the complete file",
+        ),
+    )
+    assert result.pack.excerpts == []
+    assert any(item.reason == OmissionReason.EMPTY for item in result.pack.omissions)
+
+
+def test_over_budget_range_keeps_signature(project: Path):
+    write_files(
+        project,
+        {
+            "big.py": "def big():\n"
+            + "".join(f"    x{index} = {index}\n" for index in range(50))
+            + "    return 1\n"
+        },
+    )
+    result = _build(
+        project,
+        ContextQuery(task="big", level=ExpansionLevel.RANGES, paths=["big.py"]),
+        config=ContextConfig(per_file_chars_max=30),
+    )
+    assert result.pack.excerpts == []
+    assert any(item.simple_name == "big" for item in result.pack.symbols)
+    assert "def big()" in result.user_prompt
+    assert any(item.reason == OmissionReason.BUDGET for item in result.pack.omissions)
+
+
+def test_contained_range_does_not_duplicate_signature(rich_repo: Path):
+    result = _build(
+        rich_repo,
+        ContextQuery(task="Widget", level=ExpansionLevel.RANGES, paths=["pkg/core.py"]),
+    )
+    assert all(
+        item.qualified_name != "pkg.core.Widget.render" for item in result.pack.symbols
+    )
+    assert result.user_prompt.count("def render") == 1
+
+
+def test_pack_symbols_only_include_admitted_symbols(rich_repo: Path):
+    result = _build(
+        rich_repo,
+        ContextQuery(task="Widget helper", level=ExpansionLevel.RANGES, paths=["pkg/core.py"]),
+        config=ContextConfig(per_file_chars_max=5),
+    )
+    assert result.pack.symbols == []
+
+
+def test_repository_map_is_scoped_and_omits_secret_paths(project: Path):
+    write_files(
+        project,
+        {
+            "pkg/core.py": "def core():\n    return 1\n",
+            "pkg/other.py": "def other():\n    return 2\n",
+            "leak.py": "KEY = '" + "sk-" + "e" * 32 + "'\n",
+        },
+    )
+    result = _build(
+        project,
+        ContextQuery(
+            task="core",
+            level=ExpansionLevel.MAP,
+            paths=["pkg/core.py"],
+            scope_paths=["pkg/core.py"],
+        ),
+    )
+    assert result.pack.repository_map == ["pkg/core.py [pkg.core] symbols=1"]
+    assert "leak.py" not in result.user_prompt

@@ -249,6 +249,7 @@ class DeterministicContextProvider:
                 paths=allowed,
                 scope_paths=scope,
                 stage="implement",
+                include_tests=plan.settings.get("testing") is True,
                 constraints=self._constraints("implement"),
             )
             builder = ContextBuilder(repository, config=self.context_config, index=index)

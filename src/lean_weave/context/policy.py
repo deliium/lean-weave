@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from pathlib import Path, PurePosixPath
 
+from lean_weave.errors import ContextScanError
+
 # ---------------------------------------------------------------------------
 # Hard denials. Neither a .gitignore negation nor an explicit selection may
 # override these. They are checked by path component, so nested occurrences are
@@ -275,6 +277,4 @@ def safe_root(root: Path | None = None) -> Path:
     try:
         return (root if root is not None else Path.cwd()).resolve()
     except (OSError, RuntimeError, ValueError):
-        from lean_weave.errors import ContextScanError
-
         raise ContextScanError("Cannot resolve the project root for context retrieval") from None

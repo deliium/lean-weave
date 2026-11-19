@@ -58,6 +58,14 @@ def test_inventory_applies_ignore_and_hard_denials(repository_root: Path):
         assert denied not in files
 
 
+def test_secret_like_path_names_are_not_exposed(project: Path):
+    secret_name = "sk-" + "c" * 32 + ".py"
+    write_files(project, {secret_name: "VALUE = 1\n", "keep.py": "VALUE = 1\n"})
+    repository = make_repository(project)
+    assert secret_name not in repository.inventory().files
+    assert all(secret_name not in (item.path or "") for item in repository.omissions())
+
+
 def test_configured_exclusions_are_additive_and_not_negated(repository_root: Path):
     write_files(
         repository_root,

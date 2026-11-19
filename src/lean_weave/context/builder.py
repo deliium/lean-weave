@@ -33,7 +33,7 @@ from lean_weave.context.render import (
 )
 from lean_weave.context.repository import FileSnapshot, Repository
 from lean_weave.context.repository_map import build_repository_map
-from lean_weave.errors import InvalidContextRequest
+from lean_weave.errors import ContextBudgetError, InvalidContextRequest
 from lean_weave.logging_setup import get_logger
 from lean_weave.metrics.budget import estimate_tokens
 
@@ -314,6 +314,47 @@ class ContextBuilder:
         state.symbols = symbols
         return True
 
+    def _merge_repository_omissions(self, state: _State) -> None:
+        seen = {
+            (item.reason, item.path, item.detail)
+            for item in state.omissions
+        }
+        for omission in self.repository.omissions():
+            key = (omission.reason, omission.path, omission.detail)
+            if key in seen:
+                continue
+            seen.add(key)
+            state.omissions.append(omission)
+
+    @staticmethod
+    def _selected_symbols(index: PythonIndex, state: _State) -> list[SymbolRef]:
+        """Return only symbols represented in the admitted prompt surface."""
+
+        selected: list[SymbolRef] = []
+        seen: set[tuple] = set()
+
+        def add(symbol: SymbolRef) -> None:
+            key = (symbol.path, symbol.start_line, symbol.end_line, symbol.qualified_name)
+            if key in seen:
+                return
+            seen.add(key)
+            selected.append(symbol)
+
+        for symbol in state.symbols:
+            add(symbol)
+        for excerpt in state.excerpts:
+            if not excerpt.symbol:
+                continue
+            for symbol in index.symbols_for(excerpt.path):
+                if (
+                    symbol.qualified_name == excerpt.symbol
+                    and symbol.start_line == excerpt.start_line
+                    and symbol.end_line == excerpt.end_line
+                ):
+                    add(symbol)
+                    break
+        return selected
+
     # ------------------------------------------------------------------
     # Build
     # ------------------------------------------------------------------
@@ -353,12 +394,14 @@ class ContextBuilder:
         messages = self._messages(query, state, include_optional=False)
         required_tokens = estimate_tokens(messages)
         if required_tokens > self.config.stage_prompt_tokens_max:
-            from lean_weave.errors import ContextBudgetError
-
             raise ContextBudgetError("Required context envelope exceeds the stage prompt budget")
 
-        # Repository map is the first optional level.
-        map_lines, map_omissions = build_repository_map(self.repository, index)
+        # Repository map is the first optional level. Stage-scoped builds limit
+        # the map to their explicit eligible scope instead of widening it.
+        map_paths = set(query.scope_paths) if query.scope_paths else None
+        map_lines, map_omissions = build_repository_map(
+            self.repository, index, paths=map_paths
+        )
         state.omissions.extend(map_omissions)
         self._try_map(query, state, map_lines)
 
@@ -389,19 +432,22 @@ class ContextBuilder:
         elif query.level == ExpansionLevel.FULL:
             path = query.paths[0]
             snapshot = self.repository.read(path)
-            full = CodeExcerpt(
-                path=path,
-                start_line=1,
-                end_line=snapshot.lines,
-                text=snapshot.text,
-                digest=snapshot.digest,
-                kind="full",
-            )
-            admitted = self._try_excerpt(query, state, full)
-            if not admitted:
-                # Keep lower detail rather than cutting the file.
-                for symbol in index.symbols_for(path):
-                    self._try_symbol(query, state, symbol)
+            if snapshot.lines < 1:
+                state.omissions.append(Omission(reason=OmissionReason.EMPTY, path=path))
+            else:
+                full = CodeExcerpt(
+                    path=path,
+                    start_line=1,
+                    end_line=snapshot.lines,
+                    text=snapshot.text,
+                    digest=snapshot.digest,
+                    kind="full",
+                )
+                admitted = self._try_excerpt(query, state, full)
+                if not admitted:
+                    # Keep lower detail rather than cutting the file.
+                    for symbol in index.symbols_for(path):
+                        self._try_symbol(query, state, symbol)
         elif query.level in {ExpansionLevel.SYMBOLS, ExpansionLevel.RANGES}:
             for symbol in ranked.symbols:
                 if query.level == ExpansionLevel.SYMBOLS:
@@ -420,7 +466,7 @@ class ContextBuilder:
                         Omission(reason=OmissionReason.INVALID_RANGE, path=symbol.path)
                     )
                     continue
-                self._try_excerpt(
+                admitted = self._try_excerpt(
                     query,
                     state,
                     CodeExcerpt(
@@ -433,6 +479,21 @@ class ContextBuilder:
                         symbol=symbol.qualified_name,
                     ),
                 )
+                if not admitted:
+                    # Keep the lower-detail representation when the complete
+                    # range does not fit, unless an admitted unit already
+                    # contains this signature.
+                    signature = symbol.signature or symbol.simple_name
+                    covered = any(
+                        item.path == symbol.path
+                        and item.start_line <= symbol.start_line
+                        and item.end_line >= symbol.end_line
+                        for item in state.excerpts
+                    )
+                    if not covered and not any(
+                        signature in item.text for item in state.excerpts
+                    ):
+                        self._try_symbol(query, state, symbol)
             # Non-Python explicit paths have no AST units; a complete file is
             # their only meaningful range and is labelled as such.
             for path in query.paths:
@@ -442,6 +503,11 @@ class ContextBuilder:
                     continue
                 snapshot = self.repository.try_read(path)
                 if snapshot is None:
+                    continue
+                if snapshot.lines < 1:
+                    state.omissions.append(
+                        Omission(reason=OmissionReason.EMPTY, path=path)
+                    )
                     continue
                 self._try_excerpt(
                     query,
@@ -456,18 +522,17 @@ class ContextBuilder:
                     ),
                 )
 
+        self._merge_repository_omissions(state)
         messages = self._messages(query, state)
         estimated = estimate_tokens(messages)
-        selected_symbols: list[SymbolRef] = []
-        seen_symbols: set[tuple] = set()
-        for symbol in ranked.symbols:
-            key = (symbol.path, symbol.start_line, symbol.end_line, symbol.qualified_name)
-            if key in seen_symbols:
-                continue
-            seen_symbols.add(key)
-            selected_symbols.append(symbol)
-        relevant: set[str] = {item.path for item in ranked.files}
+        selected_symbols = self._selected_symbols(index, state)
+        relevant: set[str] = {
+            item.path
+            for item in ranked.files
+            if self.repository.try_read(item.path) is not None
+        }
         relevant.update(item.path for item in state.excerpts)
+        relevant.update(item.path for item in state.symbols)
         digests = self._digest_entries(state)
         pack = ContextPack(
             task=query.task,
@@ -548,8 +613,6 @@ def build_metadata_context(
     messages = render_messages(system, user)
     estimated = estimate_tokens(messages)
     if estimated > max_tokens:
-        from lean_weave.errors import ContextBudgetError
-
         raise ContextBudgetError("Required context envelope exceeds the stage prompt budget")
     pack = ContextPack(
         task=task,

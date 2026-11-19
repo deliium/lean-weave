@@ -159,6 +159,10 @@ class Repository:
             self._visited += 1
             name = entry.name
             rel = f"{rel_dir}/{name}" if rel_dir else name
+            if contains_secret(rel):
+                # Secret-like names are never inventoried or rendered.
+                omissions.append(Omission(reason=OmissionReason.SECRET))
+                continue
             try:
                 info = entry.stat(follow_symlinks=False)
             except OSError:
@@ -318,10 +322,16 @@ class Repository:
         return [*inventory.omissions, *self._omissions.values()]
 
     def _record(self, path: str | None, reason: OmissionReason, detail: str | None = None) -> None:
-        key = path if path is not None else f"<{reason.value}:{len(self._omissions)}>"
-        self._omissions.setdefault(key, Omission(reason=reason, path=path, detail=detail))
+        safe_path = path if path is not None and not contains_secret(path) else None
+        key = safe_path if safe_path is not None else f"<{reason.value}:{len(self._omissions)}>"
+        self._omissions.setdefault(
+            key, Omission(reason=reason, path=safe_path, detail=detail)
+        )
 
     def _admit(self, normalized: str) -> FileSnapshot | None:
+        if contains_secret(normalized):
+            self._record(None, OmissionReason.SECRET)
+            return None
         parts = normalized.split("/")
         current = self.root
         for index, part in enumerate(parts):

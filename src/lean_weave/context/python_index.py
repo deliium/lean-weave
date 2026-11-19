@@ -228,9 +228,15 @@ def build_python_index(
 ) -> PythonIndex:
     eligible = repository.inventory().files
     python_paths = [path for path in eligible if is_python(path)]
-    module_paths: dict[str, str] = {}
+    candidates: dict[str, set[str]] = {}
     for path in python_paths:
-        module_paths.setdefault(_module_name(path), path)
+        candidates.setdefault(_module_name(path), set()).add(path)
+    # Only unambiguous module names may participate in import resolution.
+    module_paths = {
+        module: min(paths)
+        for module, paths in candidates.items()
+        if len(paths) == 1
+    }
     index = PythonIndex(module_paths=module_paths)
     selected = sorted(set(python_paths if paths is None else (path for path in paths if is_python(path))))
     for path in selected:

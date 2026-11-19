@@ -51,8 +51,15 @@ Repository (inventory + safe admissions)
 
 Design constraints:
 
-- Inventory is path-only; bodies are read only for admitted candidates.
-- Ranking stays inside an eligible stage scope; it never widens it.
+- Inventory is path-only; bounded snapshots are admitted through one policy for
+  maps, search, AST indexing, and rendering. Preview indexing/search may read
+  eligible candidates before prompt admission; workflow stages prefilter to
+  their approved scope first.
+- Ranking stays inside an eligible stage scope; it never widens it. Stage
+  builds also scope the repository map to task paths, one-hop imports, and
+  enabled matching tests.
+- Credential-quarantined candidates and secret-like path names are excluded
+  from maps, packs, prompts, and CLI output before exposure.
 - The root is the canonical working directory, not the config file parent or Git
   top level.
 - Git and `rg` are optional; both degrade safely. Git never runs for workflow

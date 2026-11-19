@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from typing import Iterable
 
 from lean_weave.context.models import iter_lines
 from lean_weave.context.repository import Repository, FileSnapshot
@@ -52,10 +53,15 @@ def validate_literal(query: str) -> str:
     return query
 
 
-def _snapshots(repository: Repository) -> tuple[list[FileSnapshot], list[str]]:
+def _snapshots(
+    repository: Repository, paths: Iterable[str] | None = None
+) -> tuple[list[FileSnapshot], list[str]]:
+    selected = None if paths is None else set(paths)
     snapshots: list[FileSnapshot] = []
     skipped: list[str] = []
     for path in repository.inventory().files:
+        if selected is not None and path not in selected:
+            continue
         snapshot = repository.try_read(path)
         if snapshot is None:
             skipped.append(path)
@@ -145,7 +151,13 @@ def _run_rg(query: str, payload: bytes) -> tuple[list[tuple[int, int]], str | No
     return matches, None, completed.returncode == 1
 
 
-def search(repository: Repository, query: str, *, limit: int | None = None) -> SearchResult:
+def search(
+    repository: Repository,
+    query: str,
+    *,
+    limit: int | None = None,
+    paths: Iterable[str] | None = None,
+) -> SearchResult:
     literal = validate_literal(query)
     effective_limit = limit if limit is not None else repository.config.search_hits_max
     if effective_limit <= 0:
@@ -153,7 +165,7 @@ def search(repository: Repository, query: str, *, limit: int | None = None) -> S
     if effective_limit > repository.config.search_hits_max:
         raise InvalidContextRequest("Search limit cannot exceed context.search_hits_max")
 
-    snapshots, _ = _snapshots(repository)
+    snapshots, _ = _snapshots(repository, paths)
     table = _line_table(snapshots)
     result = SearchResult()
     degraded: str | None = None

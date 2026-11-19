@@ -110,6 +110,20 @@ def test_duplicate_symbols_are_preserved(project: Path):
     assert [item.path for item in matches] == ["a.py", "b.py"]
 
 
+def test_ambiguous_module_names_are_not_resolved(project: Path):
+    write_files(
+        project,
+        {
+            "foo.py": "def root(): pass\n",
+            "src/foo.py": "def src(): pass\n",
+            "consumer.py": "import foo\n",
+        },
+    )
+    index = build_python_index(Repository(project))
+    assert "foo" not in index.module_paths
+    assert index.import_edges["consumer.py"] == ()
+
+
 def test_relative_import_without_package_is_ignored(project: Path):
     write_files(project, {"loose.py": "from . import missing\n"})
     index = build_python_index(Repository(project))

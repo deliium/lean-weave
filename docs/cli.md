@@ -146,7 +146,7 @@ uv run wl context inspect src/lean_weave/app.py --lines 75:95
 
 | Level | Adds | Notes |
 |-------|------|-------|
-| `map` | Compact path/module/symbol-count map | No file bodies |
+| `map` | Compact path/module/symbol-count map | Safe admitted paths only; no source bodies in the prompt |
 | `symbols` | Selected signatures | Default; no full files |
 | `ranges` | Complete AST `class` / `def` spans | Decorators included; non-Python explicit paths use the complete file |
 | `full` | One complete file | Requires exactly one `--path` and `--reason` |
@@ -182,17 +182,25 @@ gateway.
   trees and AI Factory working artifacts, credentials/keys/env files,
   dependency/build/cache/coverage directories, lock/generated files, binary,
   undecodable, oversized, non-regular, and symlink paths.
-- Credential patterns quarantine a candidate before its source or signature is
-  exposed. This is a bounded high-confidence filter, not a universal secret
-  detector; the same filter rejects secret-like task text and paths.
+- Credential patterns quarantine a candidate before its path, source, or
+  signature is exposed. Repository maps contain only safely admitted paths;
+  credential-quarantined files, secret-like names, oversized/binary/unreadable
+  files, and hard-denied paths are omitted. This is a bounded high-confidence
+  filter, not a universal secret detector; the same filter rejects secret-like
+  task text and explicit paths.
+- Stage-scoped builds limit the repository map to the stage's eligible scope
+  (task paths, one-hop imports, and enabled matching tests), never the whole
+  repository.
 - Search uses `rg --no-config --fixed-strings --json` over stdin only; `rg`
-  never opens repository paths. Missing `rg`, timeout, output overflow, or a
+  never opens repository paths. `--path` filters the eligible snapshot set
+  before `--limit` is applied. Missing `rg`, timeout, output overflow, or a
   malformed backend result discards partial output and falls back to Python
   substring matching over the same canonical lines.
 - Git status and recent path/status summaries are optional preview-only recency
-  signals. Git configuration is treated as untrusted; unsafe filter/diff
-  configuration disables the signal. Diff bodies, commit messages, history
-  content, and external helpers are never read or run.
+  signals. Uncommitted changes outrank committed positions. Git configuration
+  is treated as untrusted; unsafe filter/diff configuration disables the
+  signal. Diff bodies, commit messages, history content, and external helpers
+  are never read or run.
 
 ### Context exit codes
 
