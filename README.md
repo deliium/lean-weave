@@ -2,7 +2,7 @@
 
 > Token-efficient AI coding pipeline — plan, implement, verify, and retry with structured state and minimal LLM tokens.
 
-lean-weave is building a single-process feature workflow using DeepSeek and deterministic local verification. **v1-03** adds the budgeted DeepSeek gateway, exact usage accounting in an atomic JSONL ledger, and an opt-in connection check; the production feature runner comes in later plans.
+lean-weave is building a single-process feature workflow using DeepSeek and deterministic local verification. **v1-04** adds an offline, token-efficient context builder: bounded repository discovery, AST symbols/imports, literal search with an `rg`/Python fallback, deterministic ranking, provenance, and prompt budgets. The production feature runner comes in later plans.
 
 ## Quick Start
 
@@ -10,6 +10,7 @@ lean-weave is building a single-process feature workflow using DeepSeek and dete
 uv sync
 uv run wl init
 uv run wl doctor
+uv run wl context search "create_llm_provider" --json
 # optional, potentially billable, requires an environment key:
 # uv run wl llm check
 ```
@@ -21,6 +22,7 @@ The executable aliases are `wl` and `lean-weave`, both using the same app.
 
 - **Structured state** — `FeatureState` / plan / tasks / verification; not full chat history
 - **Token-budget design** — stage-scoped context with digests, allowlists, and hard bans on secrets
+- **Deterministic context preview** — bounded discovery, AST symbols/imports, `rg`/Python search, provenance, progressive expansion, and prompt budgets without LLM calls
 - **Budgeted DeepSeek gateway** — thinking/tools/JSON modes, bounded retries, per-feature budgets, measured-versus-estimated usage
 - **Orchestrator design** — deterministic state machine for MVP 1; LangGraph deferred after spike validation
 - **Deterministic verification design** — prefer compile/tests/schema checks over LLM review
@@ -30,6 +32,10 @@ The executable aliases are `wl` and `lean-weave`, both using the same app.
 ```bash
 # Inspect configuration without printing secrets
 uv run wl config show --format json
+
+# Offline context: signatures first, then complete ranges when requested
+uv run wl context build "wire the provider seam" \
+  --path src/lean_weave/app.py --level ranges --json
 uv run wl feature --help
 ```
 
@@ -51,6 +57,7 @@ uv run wl feature --help
 | [ARCHITECTURE](.ai-factory/ARCHITECTURE.md) | Boundaries, token strategy, ADRs |
 | [Plan v1-01](.ai-factory/plans/v1-01-architecture.md) | Architecture validation plan |
 | [Plan v1-03](.ai-factory/plans/v1-03-deepseek-gateway.md) | DeepSeek gateway and token metrics |
+| [Plan v1-04](.ai-factory/plans/v1-04-context-builder.md) | Deterministic context builder |
 
 ## MVP 1 exclusions
 

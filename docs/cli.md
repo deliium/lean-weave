@@ -18,6 +18,9 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl init [--force]` | Create commented defaults; refuse overwrite unless forced |
 | `wl config show [--format yaml\|json]` | Print file/default settings and `api_key_present` |
 | `wl doctor` | Check Python, package, config, state-directory writability, git and key presence |
+| `wl context search QUERY [--path PATH] [--limit N] [--symbol NAME] [--json]` | Literal snapshot search or exact symbol lookup; offline |
+| `wl context build TASK [--path PATH ...] [--level map\|symbols\|ranges\|full] [--reason TEXT] [--json]` | Build a budgeted, provenance-bearing context pack |
+| `wl context inspect PATH [--symbol NAME \| --lines START:END] [--json]` | Safe file metadata or one admitted range |
 | `wl llm check` | Opt-in DeepSeek smoke test: one small fixed request plus safe usage output |
 | `wl feature` / `wl feature --help` | Display help only; no workflow execution |
 | `wl --help` | Show commands and global options |
@@ -68,6 +71,18 @@ workflow:
   state_dir: .lean-weave
   max_retries: 2
   feature_token_budget: 20000
+context:
+  stage_prompt_tokens_max: 6000
+  per_file_chars_max: 12000
+  total_code_chars_max: 40000
+  digest_chars_max: 2000
+  retry_excerpt_chars_max: 8000
+  candidate_bytes_max: 131072
+  scan_bytes_max: 8388608
+  visited_entries_max: 20000
+  search_hits_max: 100
+  recent_commits_max: 10
+  exclusions: []
 ```
 
 Partial mappings merge with model defaults. All sections reject unknown keys.
@@ -84,12 +99,112 @@ path must not contain the API key value.
 `state_dir` must be non-empty and relative, with no `..` segments; resolved
 symlinks must stay inside the project root.
 
+`context.*` limits are strict, positive integers. `exclusions` are additive
+project-relative gitwildmatch patterns; they cannot override hard denials.
+`wl config show` prints the numeric limits and `exclusion_count`, never the raw
+exclusion strings. Per-command search limits may only tighten
+`context.search_hits_max`.
+
 Secrets are environment-only. Set the variable named by `llm.api_key_env`
 through your environment/secret manager; never put a key in YAML.
 `config show` reports only whether that variable has a non-empty value.
 It does not apply logging environment overrides to the printed configuration.
 Known secret values embedded in configuration strings are redacted from both
 YAML and JSON output.
+
+## Deterministic context preview
+
+`wl context` and `lean-weave context` run entirely offline. They make no LLM
+calls, write no index or pack, do not require `DEEPSEEK_API_KEY`, and do not
+invoke the orchestrator or StateStore. Workflows are not wired to context yet;
+this milestone exposes the retrieval service directly.
+
+```bash
+# Case-sensitive literal search over eligible canonical snapshots
+uv run wl context search "create_llm_provider" --json
+
+# Exact symbol lookup by name and optional file
+uv run wl context search helper --symbol helper --path pkg/core.py --json
+
+# Default pack: compact map plus selected signatures
+uv run wl context build "wire the provider seam" --path src/lean_weave/app.py --json
+
+# Complete AST spans for selected symbols
+uv run wl context build "wire the provider seam" --path src/lean_weave/app.py --level ranges
+
+# Full source only with one explicit path and a justification
+uv run wl context build "review the seam" --path src/lean_weave/app.py \
+  --level full --reason "the whole module is the review unit"
+
+# Safe metadata, one symbol, or one explicitly labelled partial excerpt
+uv run wl context inspect src/lean_weave/app.py --json
+uv run wl context inspect src/lean_weave/app.py --symbol create_llm_provider
+uv run wl context inspect src/lean_weave/app.py --lines 75:95
+```
+
+### Expansion and provenance
+
+| Level | Adds | Notes |
+|-------|------|-------|
+| `map` | Compact path/module/symbol-count map | No file bodies |
+| `symbols` | Selected signatures | Default; no full files |
+| `ranges` | Complete AST `class` / `def` spans | Decorators included; non-Python explicit paths use the complete file |
+| `full` | One complete file | Requires exactly one `--path` and `--reason` |
+
+Every admitted excerpt carries its project-relative path, original 1-based
+inclusive line range, and snapshot digest. Identical code is stored once with
+alternate source ranges as provenance. A manually selected `--lines` interval is
+labelled `partial`; automatic ranges are complete AST units. Omissions are
+diagnostic only and are not rendered into the prompt.
+
+### Budgets
+
+Context is admitted as whole units. Required framing (system instructions, task,
+trusted constraints, approved digests) is checked first; optional map, signature,
+range, and full-file units are added only if the complete serialized message pair
+still fits `stage_prompt_tokens_max`. Per-file, total-code, and retry excerpt
+character caps also apply. An over-budget range keeps its previously admitted
+signature; an over-budget full file falls back to lower detail and reports a
+stable omission code. Code is never cut to hit a limit. If the required envelope
+itself cannot fit, the command fails as an operational error.
+
+The prompt estimate uses the conservative local estimator in
+`metrics/budget.py` over the complete rendered message list. It is not measured
+provider usage and does not spend the feature budget enforced by the DeepSeek
+gateway.
+
+### Eligibility, search, and Git
+
+- Root is the canonical current working directory; no ancestor discovery.
+- Nested `.gitignore` files apply with negation and excluded-parent semantics,
+  with or without a Git repository. Configured exclusions are additive.
+- Hard denials always win: VCS metadata, `.lean-weave`/configured state, skill
+  trees and AI Factory working artifacts, credentials/keys/env files,
+  dependency/build/cache/coverage directories, lock/generated files, binary,
+  undecodable, oversized, non-regular, and symlink paths.
+- Credential patterns quarantine a candidate before its source or signature is
+  exposed. This is a bounded high-confidence filter, not a universal secret
+  detector; the same filter rejects secret-like task text and paths.
+- Search uses `rg --no-config --fixed-strings --json` over stdin only; `rg`
+  never opens repository paths. Missing `rg`, timeout, output overflow, or a
+  malformed backend result discards partial output and falls back to Python
+  substring matching over the same canonical lines.
+- Git status and recent path/status summaries are optional preview-only recency
+  signals. Git configuration is treated as untrusted; unsafe filter/diff
+  configuration disables the signal. Diff bodies, commit messages, history
+  content, and external helpers are never read or run.
+
+### Context exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success, including zero search hits and omission notices |
+| 1 | Operational failure: forbidden/unavailable path, unsafe input, required budget overflow |
+| 2 | Invalid selector, conflicting flags, bad line bounds, or oversized `--limit` |
+| 3 | Configuration failure |
+
+`--json` emits one stable JSON payload on stdout. Human output escapes terminal
+control characters without rewriting JSON source text.
 
 ## LLM gateway
 
@@ -237,12 +352,14 @@ injected attempt journal, an atomic `metrics_collector` slot, or the default
 JSONL ledger. A legacy collector that only implements `record_usage`/`totals`
 fails with `DependencyUnavailable` instead of silently bypassing budgets.
 
-## Not implemented in v1-03
+## Not implemented in v1-04
 
-No coding agent, LangGraph workflow runtime, generic multi-provider router,
-code editing, orchestration execution, MCP/ACP clients, Docker orchestration,
-background workers or services. Architecture spikes remain optional validation
-tools, not the product runner.
+The workflow is not wired to `ContextProvider` yet: no plan/implement/verify/retry
+execution, orchestration, code editing, or automatic retry. Context preview is a
+local, explicitly requested retrieval operation, not a workflow stage. There is
+no coding agent, LangGraph runtime, generic multi-provider router, MCP/ACP
+client, Docker orchestration, background worker or service. Architecture spikes
+remain optional validation tools, not the product runner.
 
 ## See Also
 

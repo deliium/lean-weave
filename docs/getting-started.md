@@ -15,8 +15,8 @@ From the repository root:
 uv sync
 ```
 
-That installs runtime dependencies (Pydantic, Typer, Click, PyYAML, and the
-OpenAI-compatible SDK used by the DeepSeek gateway) and pytest.
+That installs runtime dependencies (Pydantic, Typer, Click, PyYAML, pathspec,
+and the OpenAI-compatible SDK used by the DeepSeek gateway) and pytest.
 Dependency acquisition may require a package index or a populated cache.
 
 ## First run
@@ -26,11 +26,29 @@ uv run wl init
 uv run wl config show
 uv run wl doctor
 uv run wl feature --help
+uv run wl context --help
 ```
 
 `init` prints the new `.lean-weave/config.yaml` path; running it again refuses
 to overwrite without `--force`. Doctor reports local prerequisites; an absent
 API key is informational and does not prevent offline use.
+
+## Offline context preview
+
+Context retrieval is deterministic and needs no credentials:
+
+```bash
+uv run wl context search "create_llm_provider" --json
+uv run wl context build "wire the provider seam" \
+  --path src/lean_weave/app.py --level ranges --json
+uv run wl context inspect src/lean_weave/app.py --symbol create_llm_provider
+```
+
+`build` defaults to a compact map plus selected signatures. `--level ranges`
+adds complete AST spans; `--level full` requires exactly one path and a
+`--reason`. Every excerpt includes its path, original line range, and snapshot
+digest. Budgets and exclusions are configured under `context` in
+`.lean-weave/config.yaml`. Workflows are not wired to context in this milestone.
 
 ## Optional live DeepSeek check
 

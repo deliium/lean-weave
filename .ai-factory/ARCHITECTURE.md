@@ -59,9 +59,20 @@ nothing dials the network or opens the ledger until a gateway call is made.
 `providers/` holds `DeepSeekProvider` and the deterministic `MockLLMProvider`;
 `metrics/` holds typed usage records, conservative estimation, and the atomic
 JSONL journal. `cli/` is the Typer dispatch/error boundary with offline init,
-config inspection, doctor, help-only feature commands, and explicit
-`llm check`. Both `wl` and `lean-weave` use this single app;
+config inspection, doctor, help-only feature commands, offline `context`
+preview, and explicit `llm check`. Both `wl` and `lean-weave` use this single app;
 `lean_weave:main` remains the canonical Python entrypoint.
+
+`context/` is the deterministic, LLM-free retrieval seam. `repository.py`
+performs bounded path inventory and no-follow content admission; `policy.py`
+applies nested ignore rules, hard bans, and a high-confidence credential filter;
+`python_index.py` extracts AST symbols and in-repo import edges without importing
+modules; `search.py` streams canonical lines to `rg` and falls back to Python;
+`git_metadata.py` supplies optional preview-only recency from an isolated Git
+subprocess; `ranking.py` ranks inside an eligible scope; `builder.py` admits whole
+units under prompt/character caps with provenance and deduplication; `render.py`
+produces one system/user message pair; `provider.py` is the stage-scoped adapter.
+`app.py::create_context_provider` constructs it lazily without scanning.
 
 ## ADRs
 

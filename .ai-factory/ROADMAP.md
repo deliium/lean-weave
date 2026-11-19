@@ -8,7 +8,7 @@
 - [x] **Git bootstrap** — Initialize repository, baseline ignore/hygiene, first commits of architecture artifacts
 - [ ] **Core StateStore + MetricsCollector** — Persist FeatureState under `.lean-weave/`; token/usage counters only (no chat history)
 - [x] **LLMProvider (DeepSeek)** — Thinking/tools/`reasoning_content` echo, JSON mode caveats, usage fields; live probe when key available
-- [ ] **ContextProvider** — Stage-scoped budgets, digests, allowlists; ban secrets/skill trees/cross-stage transcripts
+- [x] **ContextProvider** — Stage-scoped budgets, digests, allowlists; ban secrets/skill trees/cross-stage transcripts
 - [ ] **Minimal WorkflowOrchestrator** — plan → implement → verify → retry/interrupt/resume on FeatureState (LangGraph remains deferred)
 - [ ] **CodeExecutor + VerificationRunner** — Subprocess cwd jail; deterministic compile/test/schema gates (no LLM verify in MVP)
 - [ ] **Thin CLI** — Feature start/resume/status commands wired to orchestrator; keep `lean_weave:main` canonical
@@ -23,3 +23,4 @@
 | Architecture and technical validation (v1-01) | 2026-11-08 |
 | Git bootstrap | 2026-11-18 |
 | LLMProvider (DeepSeek) | 2026-11-18 |
+| ContextProvider (deterministic offline preview) | 2026-11-19 |

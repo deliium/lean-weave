@@ -8,6 +8,7 @@ from typer.core import TyperGroup
 from lean_weave.errors import LeanWeaveError
 from lean_weave.logging_setup import get_logger, redact_console_message
 from lean_weave.cli.commands.config import config_app
+from lean_weave.cli.commands.context import context_app
 from lean_weave.cli.commands.doctor import doctor
 from lean_weave.cli.commands.feature import feature_app
 from lean_weave.cli.commands.init import initialize
@@ -34,6 +35,7 @@ app = typer.Typer(name="wl", cls=SafeGroup, no_args_is_help=True, pretty_excepti
 app.command("init")(initialize)
 app.command("doctor")(doctor)
 app.add_typer(config_app, name="config")
+app.add_typer(context_app, name="context")
 app.add_typer(feature_app, name="feature")
 app.add_typer(llm_app, name="llm")
 
