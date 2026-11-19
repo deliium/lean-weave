@@ -242,7 +242,7 @@ class Repository:
         lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         try:
             spec = pathspec.PathSpec.from_lines("gitwildmatch", lines)
-        except (ValueError, TypeError):
+        except (re.error, ValueError, TypeError):
             return
         self._ignore_specs.append((rel_dir, spec))
 
