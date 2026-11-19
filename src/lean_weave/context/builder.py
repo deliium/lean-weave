@@ -144,6 +144,11 @@ class ContextBuilder:
         text = symbol.signature or symbol.simple_name
         if not text:
             return False
+        if len(text) > self.config.per_file_chars_max:
+            state.omissions.append(
+                Omission(reason=OmissionReason.BUDGET, path=symbol.path, detail="per_file")
+            )
+            return False
         key = (symbol.path, symbol.start_line, symbol.end_line, symbol.qualified_name)
         if any(
             (item.path, item.start_line, item.end_line, item.qualified_name) == key
