@@ -193,7 +193,8 @@ def test_inspect_usage_and_forbidden(files):
     assert invoke("context", "inspect", "pkg/core.py", "--lines", "2:1").exit_code == 2
     assert invoke("context", "inspect", "pkg/core.py", "--lines", "nope").exit_code == 2
     assert invoke("context", "inspect", "missing.py").exit_code == 1
-    assert invoke("context", "inspect", "pkg/core.py", "--symbol", "absent").exit_code == 2
+    assert invoke("context", "inspect", "pkg/core.py", "--symbol", "absent").exit_code == 1
+    assert invoke("context", "inspect", "pkg/core.py", "--lines", "1:999").exit_code == 2
 
 
 def test_human_output_escapes_terminal_controls(files):

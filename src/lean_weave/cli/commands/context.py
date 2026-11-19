@@ -254,7 +254,7 @@ def inspect_command(
         _guard(symbol, what="Symbol name")
         matches = index.lookup(symbol, path=selected_path)
         if not matches:
-            raise typer.BadParameter("Requested symbol was not found in the selected file")
+            raise InvalidContextRequest("Requested symbol was not found in the selected file")
         if len(matches) > 1:
             # Preserve deterministic first match by coordinates.
             matches = [matches[0]]
@@ -284,6 +284,8 @@ def inspect_command(
         return
     if lines is not None:
         start, end = _parse_lines(lines)
+        if end > snapshot.lines:
+            raise typer.BadParameter("--lines bounds are outside the selected file")
         query = ContextQuery(
             task=f"inspect {selected_path}:{start}-{end}",
             level=ExpansionLevel.RANGES,
