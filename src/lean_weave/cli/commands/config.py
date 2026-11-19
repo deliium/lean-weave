@@ -23,6 +23,11 @@ def show(
     """Print file/default settings, never secret values."""
     context = command_context(ctx)
     data = context.config.model_dump(mode="json")
+    context_data = dict(data["context"])
+    exclusions = context_data.pop("exclusions", [])
+    # Exclusion patterns are operator input and may themselves be sensitive.
+    context_data["exclusion_count"] = len(exclusions)
+    data["context"] = context_data
     data["api_key_present"] = bool(os.getenv(context.config.llm.api_key_env))
     if format == "json":
         rendered = json.dumps(data)

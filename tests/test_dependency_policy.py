@@ -17,6 +17,8 @@ def test_runtime_dependency_policy():
     # Narrow runtime exception: the DeepSeek gateway uses the OpenAI-compatible
     # SDK. No other agent, MCP, Docker, or orchestration framework is allowed.
     assert "openai" in names
+    # Deterministic .gitignore matching for context eligibility.
+    assert "pathspec" in names
     forbidden = {
         name for name in names
         if name in {"langgraph", "mcp", "docker"}

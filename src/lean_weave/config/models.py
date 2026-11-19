@@ -66,12 +66,47 @@ class WorkflowConfig(ConfigModel):
         return value
 
 
+class ContextConfig(ConfigModel):
+    """Strict deterministic-retrieval limits; every cap is a hard maximum."""
+
+    stage_prompt_tokens_max: int = Field(default=6000, gt=0)
+    per_file_chars_max: int = Field(default=12000, gt=0)
+    total_code_chars_max: int = Field(default=40000, gt=0)
+    digest_chars_max: int = Field(default=2000, gt=0)
+    retry_excerpt_chars_max: int = Field(default=8000, gt=0)
+    candidate_bytes_max: int = Field(default=131072, gt=0)
+    scan_bytes_max: int = Field(default=8388608, gt=0)
+    visited_entries_max: int = Field(default=20000, gt=0)
+    search_hits_max: int = Field(default=100, gt=0)
+    recent_commits_max: int = Field(default=10, gt=0, le=1000)
+    exclusions: list[str] = Field(default_factory=list)
+
+    @field_validator("exclusions")
+    @classmethod
+    def validate_exclusions(cls, values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("exclusions must be non-empty strings")
+            if any(ord(char) < 32 or ord(char) == 127 for char in value):
+                raise ValueError("exclusions must not contain control characters")
+            candidate = value.strip().replace("\\", "/")
+            if candidate.startswith("/") or (len(candidate) > 1 and candidate[1] == ":"):
+                raise ValueError("exclusions must be project-relative patterns")
+            if ".." in candidate.split("/"):
+                raise ValueError("exclusions must not contain parent segments")
+            if candidate not in result:
+                result.append(candidate)
+        return result
+
+
 class AppConfig(ConfigModel):
     version: Literal[1] = 1
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+    context: ContextConfig = Field(default_factory=ContextConfig)
 
     @field_validator("version", mode="before")
     @classmethod

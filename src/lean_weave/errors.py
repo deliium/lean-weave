@@ -48,3 +48,23 @@ class BudgetExceededError(LeanWeaveError):
 
 class JournalError(LeanWeaveError):
     """Persistent usage accounting is unreadable, conflicting, or unwritable."""
+
+
+class ContextError(LeanWeaveError):
+    """Base class for safe deterministic-context failures."""
+
+
+class InvalidContextRequest(ContextError):
+    """Malformed or contradictory context selector supplied by the caller."""
+
+
+class ForbiddenContext(ContextError):
+    """Requested context crosses an eligibility, secret, or stage boundary."""
+
+
+class ContextScanError(ContextError):
+    """Repository discovery could not proceed safely."""
+
+
+class ContextBudgetError(ContextError):
+    """The required prompt envelope exceeds the configured stage budget."""
