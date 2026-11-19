@@ -63,9 +63,13 @@ class ContextBundle(TypedDict, total=False):
     stage: StageName
     system_prompt: str
     user_prompt: str
+    #: The canonical prompt pair is the only caller-facing message surface.
+    messages: list[LLMMessage]
     file_excerpts: Mapping[str, str]
     digests: Mapping[str, str]
     estimated_tokens: int
+    #: Typed inspection view; never appended to ``messages`` a second time.
+    pack: Any
 
 
 class ExecRequest(TypedDict, total=False):

@@ -9,6 +9,7 @@ import httpx2
 from openai import OpenAI
 
 from lean_weave.config import AppConfig, load_config
+from lean_weave.context.provider import DeterministicContextProvider
 from lean_weave.contracts import (
     CodeExecutor, ContextProvider, LLMProvider, MetricsCollector,
     StateStore, VerificationRunner, WorkflowOrchestrator,
@@ -72,8 +73,36 @@ def build_app_context(
     return context
 
 
-def create_llm_provider(
+def create_context_provider(
     context: AppContext,
+    *,
+    provider: ContextProvider | None = None,
+    metadata_digests: dict[str, str] | None = None,
+) -> ContextProvider:
+    """Construct the deterministic provider lazily; no scan or Git here.
+
+    An injected provider always wins. Construction only records limits and the
+    optional approved metadata digests; repository discovery starts on the
+    first ``build`` call.
+    """
+
+    if context.context_provider is not None:
+        log.debug("[AppContext.context] selection=injected provider")
+        return context.context_provider
+    if provider is not None:
+        return provider
+    log.debug(
+        "[AppContext.context] selection=deterministic stage_prompt_tokens_max=%s",
+        context.config.context.stage_prompt_tokens_max,
+    )
+    return DeterministicContextProvider(
+        Path.cwd(),
+        config=context.config,
+        metadata_digests=metadata_digests,
+    )
+
+
+def create_llm_provider(    context: AppContext,
     *,
     journal: AttemptJournal | None = None,
     client: OpenAI | None = None,
