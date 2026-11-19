@@ -7,10 +7,10 @@ from lean_weave.config.loader import (
     init_config,
     load_config,
 )
-from lean_weave.config.models import AppConfig, ContextConfig
+from lean_weave.config.models import AppConfig, ApprovedCheck, ContextConfig, ToolsConfig
 from lean_weave.errors import ConfigError
 
 __all__ = [
-    "AppConfig", "ContextConfig", "ConfigError", "LoadedConfig", "load_config",
-    "init_config", "dump_config", "DEFAULT_CONFIG_PATH",
+    "AppConfig", "ApprovedCheck", "ContextConfig", "ConfigError", "LoadedConfig",
+    "ToolsConfig", "load_config", "init_config", "dump_config", "DEFAULT_CONFIG_PATH",
 ]

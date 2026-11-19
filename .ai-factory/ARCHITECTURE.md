@@ -74,6 +74,19 @@ units under prompt/character caps with provenance and deduplication; `render.py`
 produces one system/user message pair; `provider.py` is the stage-scoped adapter.
 `app.py::create_context_provider` constructs it lazily without scanning.
 
+`executor/` and `verify/` are standalone code tools. `approval.py` freezes a
+trusted root and, only when the caller opts in, a write scope or check
+registry. `workspace.py` re-admits paths with no-follow handles, nested ignore
+rules, and the shared credential filter; a symlinked or unreadable
+`.gitignore` makes that subtree indeterminate. `source.py` serves ranged
+reads, whole symbols, and literal symbol search through `python_index.py`.
+`patch.py` applies one exact unified diff and replaces the file atomically.
+`git_diff.py` returns staged or unstaged path/status metadata from an isolated
+read-only Git subprocess. `verify/process.py` captures a fixed argv with a
+deadline and byte cap; `verify/checks.py` turns recognized diagnostics into
+template summaries. Neither package is mounted on `AppContext`, the CLI, or
+the `CodeExecutor` / `VerificationRunner` protocols.
+
 ## ADRs
 
 | ADR | Topic |

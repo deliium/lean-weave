@@ -15,6 +15,7 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Deterministic verification** (compile / tests / schema / file checks) preferred over LLM review
 - **Stage-scoped context** with hard bans on secrets, full skill trees, and cross-stage transcripts
 - **Deterministic context retrieval** — bounded repository inventory, AST symbols/imports, literal search with an `rg`/Python fallback, lexicographic ranking, and prompt budgets; no embeddings, LLM calls, or persistent index
+- **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata. They are not wired to the workflow contracts or the CLI
 
 ## Component boundaries
 
@@ -72,6 +73,31 @@ Design constraints:
 - Workflows are not wired to the provider in v1-04; `wl context` is an offline
   preview surface.
 
+## Standalone code tools
+
+`src/lean_weave/executor/` and `src/lean_weave/verify/` read, patch, and check
+one explicit workspace. YAML is data: writes and check argv are copied into an
+immutable approval only when the caller opts in. There is no tool CLI command,
+and these modules do not implement `CodeExecutor.run` or
+`VerificationRunner.run`.
+
+```text
+approve_tools (explicit root, optional write scope, optional check registry)
+  → workspace (no-follow admission, ignore policy, credential filter)
+  → source (read_range, read_symbol, search_symbols)
+  → patch (exact unified diff, atomic replace)
+  → git_diff (staged or unstaged path/status only)
+  → verify (approved argv, bounded capture, template diagnostics)
+```
+
+Reads reuse the context AST index and hard-deny rules. A bad `.gitignore` makes
+its subtree indeterminate instead of being ignored. Patches require the current
+byte revision and do not create, delete, or rename files. Git inspection is
+read-only and does not search a parent repository. Checks that load workspace
+code need an injected offline backend; none is bundled here.
+
+Details, request shapes, and limits: [Standalone code tools](code-tools.md).
+
 ## Orchestrator decision
 
 | Option | MVP 1 |
@@ -86,9 +112,9 @@ Methodology from `aif-plan` / `aif-implement` / `aif-verify` is reused as **arti
 ## Package layout (target)
 
 ```text
-src/lean_weave/   # cli, config, context, providers, metrics, contracts, schemas, app
+src/lean_weave/   # cli, config, context, executor, verify, providers, metrics, contracts, schemas, app
 spikes/           # bounded probes — not production CLI
-tests/            # config / contracts / providers / metrics / cli / context
+tests/            # config / contracts / providers / metrics / cli / context / executor / verify
 .lean-weave/      # runtime FeatureState and metrics ledger (gitignored)
 .ai-factory/      # DESCRIPTION, ARCHITECTURE, plans, ADRs, references
 docs/             # human docs
@@ -113,5 +139,6 @@ No MCP, ACP, Docker orchestration, background workers, multi-agent routers, or n
 
 - [Getting Started](getting-started.md) — install and verify
 - [CLI Reference](cli.md) — commands, context preview, configuration
+- [Standalone code tools](code-tools.md) — reads, patches, checks, Git metadata
 - [Token budget principles](../.ai-factory/references/v1-01-token-budget-principles.md) — ContextProvider rules
 - [MVP 1 acceptance criteria](../.ai-factory/references/v1-01-mvp1-acceptance-criteria.md) — architecture gate checklist

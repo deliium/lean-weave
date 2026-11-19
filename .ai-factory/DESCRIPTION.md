@@ -8,6 +8,7 @@ Token-efficient AI coding pipeline that automates feature development with struc
 - **Packaging:** uv (`pyproject.toml`, `src/lean_weave`)
 - **CLI/configuration foundation:** Typer (Click-based release), Click, PyYAML; product configuration is `.lean-weave/config.yaml` (separate from AI Factory tooling). Executables: `wl` and `lean-weave`.
 - **Context retrieval:** deterministic, LLM-free `context/` package — bounded repository inventory with `pathspec` ignore semantics, AST symbols/imports, literal search (`rg` stdin with Python fallback), optional preview Git recency, lexicographic ranking, provenance, progressive expansion, and prompt budgets.
+- **Code tools:** standalone `executor/` and `verify/` APIs for bounded reads, exact single-file patches, approved checks, and read-only Git path/status inspection. YAML does not authorize writes or spawns; no tool CLI and no workflow wiring.
 - **LLM:** DeepSeek OpenAI-compatible API (`deepseek-flash` / `deepseek-v4-pro`) via the locked `openai` SDK client; centralized budgeted `DeepSeekProvider` with an atomic JSONL usage ledger
 - **Orchestrator (MVP 1):** minimal deterministic state machine (LangGraph deferred; spike retained)
 - **Schemas:** Pydantic FeatureState / FeaturePlan / tasks / VerificationResult

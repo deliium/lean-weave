@@ -68,3 +68,15 @@ class ContextScanError(ContextError):
 
 class ContextBudgetError(ContextError):
     """The required prompt envelope exceeds the configured stage budget."""
+
+
+class ToolError(LeanWeaveError):
+    """Safe code-tool failure. Messages are stable codes, never payloads."""
+
+
+class InvalidToolRequest(ToolError):
+    """Malformed tool input. The message must not echo the rejected value."""
+
+
+class ForbiddenTool(ToolError):
+    """The tool request crosses an authorization or credential boundary."""

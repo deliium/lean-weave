@@ -48,6 +48,7 @@ uv run wl feature --help
 | [Getting Started](docs/getting-started.md) | Install, sync, tests, logging, spikes |
 | [Architecture](docs/architecture.md) | Components, orchestrator decision, boundaries |
 | [CLI Reference](docs/cli.md) | Commands, configuration, errors, injection |
+| [Code tools](docs/code-tools.md) | Offline reads, patches, checks, and Git metadata |
 
 ### Agent artifacts
 
@@ -58,6 +59,7 @@ uv run wl feature --help
 | [Plan v1-01](.ai-factory/plans/v1-01-architecture.md) | Architecture validation plan |
 | [Plan v1-03](.ai-factory/plans/v1-03-deepseek-gateway.md) | DeepSeek gateway and token metrics |
 | [Plan v1-04](.ai-factory/plans/v1-04-context-builder.md) | Deterministic context builder |
+| [Plan v1-05](.ai-factory/plans/v1-05-code-tools.md) | Safe code editing and verification tools |
 
 ## MVP 1 exclusions
 

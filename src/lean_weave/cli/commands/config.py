@@ -28,6 +28,18 @@ def show(
     # Exclusion patterns are operator input and may themselves be sensitive.
     context_data["exclusion_count"] = len(exclusions)
     data["context"] = context_data
+    tools_data = dict(data.get("tools") or {})
+    read_allow = tools_data.pop("read_allow", [])
+    write_allow = tools_data.pop("write_allow", [])
+    excludes = tools_data.pop("excludes", [])
+    checks = tools_data.pop("checks", [])
+    # Allowlists, excludes, and check argv are operator policy and may embed
+    # secrets. Counts and numeric bounds are the safe display surface.
+    tools_data["read_allow_count"] = len(read_allow)
+    tools_data["write_allow_count"] = len(write_allow)
+    tools_data["exclude_count"] = len(excludes)
+    tools_data["check_count"] = len(checks)
+    data["tools"] = tools_data
     data["api_key_present"] = bool(os.getenv(context.config.llm.api_key_env))
     if format == "json":
         rendered = json.dumps(data)

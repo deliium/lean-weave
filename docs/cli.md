@@ -83,6 +83,23 @@ context:
   search_hits_max: 100
   recent_commits_max: 10
   exclusions: []
+tools:
+  read_allow: []
+  write_allow: []
+  excludes: []
+  scan_bytes_max: 8388608
+  file_bytes_max: 131072
+  visited_entries_max: 20000
+  result_chars_max: 12000
+  range_lines_max: 400
+  search_hits_max: 50
+  patch_bytes_max: 65536
+  patch_hunks_max: 32
+  checks_max: 8
+  runtime_s_max: 30.0
+  capture_bytes_max: 65536
+  diagnostics_max: 20
+  checks: []
 ```
 
 Partial mappings merge with model defaults. All sections reject unknown keys.
@@ -104,6 +121,14 @@ project-relative gitwildmatch patterns; they cannot override hard denials.
 `wl config show` prints the numeric limits and `exclusion_count`, never the raw
 exclusion strings. Per-command search limits may only tighten
 `context.search_hits_max`.
+
+`tools` stores read/write allowlists, additive excludes, numeric budgets, and
+optional check definitions. Those lists do not authorize writes or process
+spawns; a caller must build an approval snapshot and opt in. `config show`
+prints `read_allow_count`, `write_allow_count`, `exclude_count`, `check_count`,
+and the numeric bounds. It does not print allowlists, exclude patterns, check
+argv, or executable paths. There is no CLI command for the code tools.
+See [Standalone code tools](code-tools.md).
 
 Secrets are environment-only. Set the variable named by `llm.api_key_env`
 through your environment/secret manager; never put a key in YAML.

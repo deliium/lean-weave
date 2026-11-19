@@ -86,6 +86,13 @@ def load_config(path: Path | None = None, *, required: bool = False) -> LoadedCo
         log.error("[Config.load] validation failed path=%s", source)
         raise
     log.debug("[Config.load] path=%s keys=%s", source, sorted(set(data) & AppConfig.model_fields.keys()))
+    log.debug(
+        "[Config.load] tools outcome=ok file_bytes_max=%s scan_bytes_max=%s runtime_s_max=%s checks=%s",
+        config.tools.file_bytes_max,
+        config.tools.scan_bytes_max,
+        config.tools.runtime_s_max,
+        len(config.tools.checks),
+    )
     log.info("[Config.load] source=%s path=%s level=%s", source, source, config.logging.level)
     return LoadedConfig(config, source)
 
