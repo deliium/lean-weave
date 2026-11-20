@@ -15,18 +15,18 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Deterministic verification** (compile / tests / schema / file checks) preferred over LLM review
 - **Stage-scoped context** with hard bans on secrets, full skill trees, and cross-stage transcripts
 - **Deterministic context retrieval** — bounded repository inventory, AST symbols/imports, literal search with an `rg`/Python fallback, lexicographic ranking, and prompt budgets; no embeddings, LLM calls, or persistent index
-- **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata. The workflow consumes them only through an explicit caller approval snapshot; they remain unwired from the CLI
+- **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata through an explicit caller approval snapshot
+- **Worktree session** — public CLI provisions or adopts a linked worktree, freezes approvals, and drives the existing orchestrator without a second engine
 
 ## Component boundaries
 
 ```text
-CLI → WorkflowOrchestrator
-        ├─ ContextProvider   (deterministic allowlists / budgets)
-        ├─ LLMProvider       (DeepSeek only in MVP)
-        ├─ CodeExecutor      (subprocess, cwd jail)
-        ├─ VerificationRunner (no LLM in MVP)
-        ├─ StateStore        (.lean-weave/)
-        └─ MetricsCollector  (token counters)
+CLI → FeatureSession → WorktreeManager + WorkflowOrchestrator
+                              ├─ ContextProvider
+                              ├─ LLMProvider
+                              ├─ CodeExecutor / VerificationRunner
+                              ├─ StateStore (per worktree)
+                              └─ MetricsCollector (per worktree journal)
 ```
 
 Contracts (typing-only Protocols): `src/lean_weave/contracts/`.  

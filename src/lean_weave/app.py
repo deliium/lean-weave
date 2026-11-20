@@ -86,12 +86,14 @@ def create_context_provider(
     *,
     provider: ContextProvider | None = None,
     metadata_digests: dict[str, str] | None = None,
+    workspace_root: Path | None = None,
 ) -> ContextProvider:
     """Construct the deterministic provider lazily; no scan or Git here.
 
     An injected provider always wins. Construction only records limits and the
     optional approved metadata digests; repository discovery starts on the
-    first ``build`` call.
+    first ``build`` call. ``workspace_root`` defaults to the process cwd for
+    existing callers; the feature session passes an explicit worktree root.
     """
 
     if context.context_provider is not None:
@@ -99,12 +101,13 @@ def create_context_provider(
         return context.context_provider
     if provider is not None:
         return provider
+    root = Path.cwd() if workspace_root is None else workspace_root
     log.debug(
         "[AppContext.context] selection=deterministic stage_prompt_tokens_max=%s",
         context.config.context.stage_prompt_tokens_max,
     )
     return DeterministicContextProvider(
-        Path.cwd(),
+        root,
         config=context.config,
         metadata_digests=metadata_digests,
     )
@@ -169,22 +172,26 @@ def create_orchestrator(
     model: str | None = None,
     thinking: str | None = None,
     instructions: Mapping[str, Sequence[str]] | None = None,
+    workspace_root: Path | None = None,
+    orchestrator_kwargs: Mapping[str, object] | None = None,
 ) -> WorkflowOrchestrator:
     """Construct the minimal driver lazily; no network, scan, or ledger I/O.
 
     An injected orchestrator always wins. Otherwise the existing injected
     dependencies and provider factories are reused. Automatic writes require an
     explicit ``ToolApproval``; no approval means no patch authority.
+    ``workspace_root`` defaults to cwd; the feature session passes the worktree.
     """
 
     if context.orchestrator is not None:
         log.debug("[AppContext.orchestrator] selection=injected")
         return context.orchestrator
 
+    root = Path.cwd() if workspace_root is None else workspace_root
     store = context.state_store
     if store is None:
         store = JsonCheckpointStore(
-            Path.cwd(), state_dir=context.config.workflow.state_dir
+            root, state_dir=context.config.workflow.state_dir
         )
     if not checkpoint_capability(store):
         raise DependencyUnavailable("StateStore cannot provide atomic workflow checkpoints")
@@ -210,20 +217,20 @@ def create_orchestrator(
             require_bypass_checks=True,
         )
 
+    # Empty map → each stage loads its registered defaults by ID.
+    # Do not preload fragment text here; load_instructions treats values as IDs.
     selected_instructions = dict(instructions or {})
-    if not selected_instructions:
-        selected_instructions = {
-            stage: load_instructions(stage) for stage in ("plan", "implement", "verify", "retry")
-        }
     accounting = journal if journal is not None else context.metrics_collector
     if accounting is None and context.llm_provider is None:
         # One ledger instance backs both gateway admission and workflow
         # feature-wide spend, so the two layers cannot disagree.
-        accounting = JsonlMetricsCollector.from_config(context.config)
+        state_path = (root / context.config.workflow.state_dir).resolve()
+        accounting = JsonlMetricsCollector(state_path)
+    extra = dict(orchestrator_kwargs or {})
     orchestrator = MinimalWorkflowOrchestrator(
         config=context.config.workflow,
         llm_provider=create_llm_provider(context, journal=accounting),  # type: ignore[arg-type]
-        context_provider=create_context_provider(context),
+        context_provider=create_context_provider(context, workspace_root=root),
         state_store=store,
         verification_runner=verification_runner,
         tools=tools,
@@ -237,6 +244,7 @@ def create_orchestrator(
         output_cap=context.config.llm.max_output_tokens,
         instructions=selected_instructions,
         journal=accounting,
+        **extra,  # type: ignore[arg-type]
     )
     log.info(
         "[AppContext.orchestrator] selection=minimal writes=%s checks=%s ledger=%s",

@@ -443,3 +443,322 @@ def test_resume_revalidates_approval(tmp_path):
     assert result.stage is Stage.INTERRUPTED
     assert result.interrupt["reason"] == "approval_required"
     assert provider.requests == []
+
+
+def test_review_mode_pauses_before_implementation(tmp_path):
+    provider = MockLLMProvider([_plan_response(), _final()])
+    runner = ScriptedRunner([VerificationResult(status=VerificationStatus.PASS)])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    tools = WorkflowTools(approval, task_files=[], checks_ready=True)
+    from lean_weave.workflow.lifecycle import ExecutionMode
+
+    fingerprint = "sha256:" + "a" * 64
+    orchestrator = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=tools,
+        plan_policy=_policy(),
+        mode=ExecutionMode.REVIEW,
+        pinned_head="a" * 40,
+        baseline_fingerprint=lambda: fingerprint,
+        binding_extra=lambda: {"policy": "frozen"},
+    )
+    state = orchestrator.run_feature("review", "edit a")
+    assert state.stage is Stage.INTERRUPTED
+    assert state.interrupt["reason"] == "review_pending"
+    assert state.plan is not None
+    envelope = store.load_checkpoint("review")
+    assert envelope.control.review_gate is not None
+    assert envelope.control.review_gate.accepted is False
+    token = envelope.control.review_gate.token
+    assert token
+    assert len(provider.requests) == 1
+    assert provider.requests[0]["stage"] == "plan"
+    assert runner.run_calls == 0
+    assert (tmp_path / "ws" / "src" / "a.py").read_text(encoding="utf-8") == "value = 1\n"
+
+    # Resume without token keeps the gate.
+    blocked = orchestrator.resume("review")
+    assert blocked.stage is Stage.INTERRUPTED
+    assert blocked.interrupt["reason"] == "review_pending"
+    assert len(provider.requests) == 1
+
+    # Wrong token is rejected.
+    wrong = orchestrator.resume("review", {"kind": "approve_review", "token": "deadbeef" * 2})
+    assert wrong.stage is Stage.INTERRUPTED
+    assert wrong.interrupt["reason"] == "invalid_review_token"
+    assert len(provider.requests) == 1
+
+    # Valid approval unlocks implementation exactly once.
+    done = orchestrator.resume("review", {"kind": "approve_review", "token": token})
+    assert done.stage is Stage.DONE
+    assert [request["stage"] for request in provider.requests] == ["plan", "implement"]
+    assert store.load_checkpoint("review").control.review_gate.accepted is True
+    assert store.load_checkpoint("review").control.review_gate.token is None
+
+
+def test_review_stale_binding_and_baseline_drift(tmp_path):
+    from lean_weave.workflow.lifecycle import ExecutionMode
+
+    provider = MockLLMProvider([_plan_response()])
+    runner = ScriptedRunner([])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    tools = WorkflowTools(approval, task_files=[], checks_ready=True)
+    baseline = {"value": "sha256:" + "1" * 64}
+
+    orchestrator = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=tools,
+        plan_policy=_policy(),
+        mode=ExecutionMode.REVIEW,
+        pinned_head="b" * 40,
+        baseline_fingerprint=lambda: baseline["value"],
+        binding_extra=lambda: {"k": "v1"},
+    )
+    paused = orchestrator.run_feature("stale", "edit a")
+    assert paused.interrupt["reason"] == "review_pending"
+    token = store.load_checkpoint("stale").control.review_gate.token
+
+    baseline["value"] = "sha256:" + "2" * 64
+    stale = orchestrator.resume("stale", {"kind": "approve_review", "token": token})
+    assert stale.interrupt["reason"] in {"stale_baseline", "stale_binding"}
+    assert len(provider.requests) == 1
+    assert runner.run_calls == 0
+
+
+def test_review_gate_survives_accepted_crash_before_implement(tmp_path):
+    from lean_weave.workflow.lifecycle import ExecutionMode
+
+    provider = MockLLMProvider([_plan_response(), _final()])
+    runner = ScriptedRunner([VerificationResult(status=VerificationStatus.PASS)])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    tools = WorkflowTools(approval, task_files=[], checks_ready=True)
+    fingerprint = "sha256:" + "c" * 64
+    orch = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=tools,
+        plan_policy=_policy(),
+        mode=ExecutionMode.REVIEW,
+        pinned_head="c" * 40,
+        baseline_fingerprint=lambda: fingerprint,
+    )
+    paused = orch.run_feature("crash", "edit a")
+    assert paused.stage is Stage.INTERRUPTED
+    token = store.load_checkpoint("crash").control.review_gate.token
+    assert orch._accept_review({"kind": "approve_review", "token": token}) is True
+    envelope = store.load_checkpoint("crash")
+    assert envelope.control.review_gate.accepted is True
+    assert envelope.control.review_gate.token is None
+    assert envelope.state.stage is Stage.INTERRUPTED
+    assert len(provider.requests) == 1
+
+    # Fresh process: accepted gate is durable; resume must not replan.
+    fresh = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=tools,
+        plan_policy=_policy(),
+        mode=ExecutionMode.REVIEW,
+        pinned_head="c" * 40,
+        baseline_fingerprint=lambda: fingerprint,
+    )
+    done = fresh.resume("crash")
+    assert done.stage is Stage.DONE
+    assert [request["stage"] for request in provider.requests] == ["plan", "implement"]
+
+
+def test_cancel_before_dispatch_is_terminal_cancelled(tmp_path):
+    provider = MockLLMProvider([_final()])
+    runner = ScriptedRunner([VerificationResult(status=VerificationStatus.PASS)])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    tools = WorkflowTools(approval, task_files=[], checks_ready=True)
+    cancelled = {"flag": True}
+    orchestrator = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=tools,
+        plan_policy=_policy(),
+        cancel_check=lambda: cancelled["flag"],
+    )
+    spec = SingleTaskSpec(id="1", title="edit", file="src/a.py", check_ids=["parse"])
+    state = orchestrator.run_simple("cancel", "edit a", spec)
+    assert state.stage is Stage.FAILED
+    result = orchestrator.result("cancel")
+    assert result.status is WorkflowStatus.CANCELLED
+    assert result.reason == "cancelled"
+    assert provider.requests == []
+    assert runner.run_calls == 0
+
+
+def test_pending_effect_wins_over_cancel(tmp_path):
+    provider = MockLLMProvider([])
+    runner = ScriptedRunner([])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    state = FeatureState(feature_id="fx", stage=Stage.IMPLEMENT)
+    control = ControlRecord(feature_id="fx", workspace=store.identity)
+    control.pending_effect = PendingEffect(
+        kind=EffectKind.PATCH,
+        operation_id="patch-1",
+        paths=["src/a.py"],
+        confirmed=False,
+    )
+    _seed(store, approval, state, control)
+    orchestrator = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=WorkflowTools(approval, task_files=[], checks_ready=True),
+        plan_policy=_policy(),
+        cancel_check=lambda: True,
+    )
+    resumed = orchestrator.resume("fx")
+    assert resumed.stage is Stage.INTERRUPTED
+    assert resumed.interrupt["reason"] == "unresolved_effect"
+    assert store.load_checkpoint("fx").control.pending_effect is not None
+    assert orchestrator.result("fx").status is not WorkflowStatus.CANCELLED
+
+
+def test_continuation_restores_implement_without_replan(tmp_path):
+    provider = MockLLMProvider([ProviderError("transport failed"), _final()])
+    runner = ScriptedRunner([VerificationResult(status=VerificationStatus.PASS)])
+    orchestrator, store, approval = _orchestrator(tmp_path, provider, runner)
+    state = FeatureState(
+        feature_id="cont",
+        stage=Stage.IMPLEMENT,
+        plan=FeaturePlan(
+            goal="g",
+            tasks=[ImplementationTask(id="1", title="edit", files=["src/a.py"])],
+        ),
+        active_task_id="1",
+    )
+    _seed(store, approval, state)
+    first = orchestrator.resume("cont")
+    assert first.stage is Stage.INTERRUPTED
+    envelope = store.load_checkpoint("cont")
+    assert envelope.control.continuation is not None
+    assert envelope.control.continuation.stage is Stage.IMPLEMENT
+    second = orchestrator.resume("cont")
+    assert second.stage is Stage.DONE
+    assert [request["stage"] for request in provider.requests] == ["implement", "implement"]
+
+
+def test_resume_after_process_death_in_plan_fails_closed(tmp_path):
+    provider = MockLLMProvider([])
+    runner = ScriptedRunner([])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    state = FeatureState(feature_id="dead-plan", stage=Stage.PLAN)
+    control = ControlRecord(feature_id="dead-plan", workspace=store.identity)
+    control.inflight_stage = "plan"
+    _seed(store, approval, state, control)
+
+    orchestrator = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=WorkflowTools(approval, task_files=[], checks_ready=True),
+        plan_policy=_policy(),
+    )
+    result = orchestrator.resume("dead-plan")
+    assert result.stage is Stage.FAILED
+    assert orchestrator.result("dead-plan").reason == "manual_inspection"
+    assert provider.requests == []
+
+
+def test_resume_with_committed_patch_outcome_missing_fails_closed(tmp_path):
+    provider = MockLLMProvider([])
+    runner = ScriptedRunner([])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    state = FeatureState(
+        feature_id="dead-edit",
+        stage=Stage.IMPLEMENT,
+        plan=FeaturePlan(
+            goal="g",
+            tasks=[ImplementationTask(id="1", title="edit", files=["src/a.py"])],
+        ),
+        active_task_id="1",
+    )
+    control = ControlRecord(feature_id="dead-edit", workspace=store.identity)
+    control.applied_effect = PendingEffect(
+        kind=EffectKind.PATCH,
+        operation_id="patch-1",
+        task_id="1",
+        paths=["src/a.py"],
+        confirmed=True,
+    )
+    _seed(store, approval, state, control)
+
+    orchestrator = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=WorkflowTools(approval, task_files=[], checks_ready=True),
+        plan_policy=_policy(),
+    )
+    result = orchestrator.resume("dead-edit")
+    assert result.stage is Stage.FAILED
+    assert orchestrator.result("dead-edit").reason == "manual_inspection"
+    assert provider.requests == []
+
+
+def test_verification_outcome_and_marker_clear_in_one_checkpoint(tmp_path):
+    provider = MockLLMProvider([_final()])
+    runner = ScriptedRunner([VerificationResult(status=VerificationStatus.PASS)])
+    store = JsonCheckpointStore(tmp_path)
+    approval = _approval(tmp_path)
+    orchestrator = MinimalWorkflowOrchestrator(
+        config=WorkflowConfig(),
+        llm_provider=provider,
+        context_provider=FakeContext(),
+        state_store=store,
+        verification_runner=runner,
+        tools=WorkflowTools(approval, task_files=[], checks_ready=True),
+        plan_policy=_policy(),
+    )
+    captures = []
+    original = store.save_checkpoint
+
+    def spy(state, control):
+        captures.append(
+            (
+                state.stage,
+                state.verification is not None,
+                control.pending_effect,
+            )
+        )
+        return original(state, control)
+
+    store.save_checkpoint = spy  # type: ignore[method-assign]
+    spec = SingleTaskSpec(id="1", title="edit", file="src/a.py", check_ids=["parse"])
+    state = orchestrator.run_simple("atomic", "edit a", spec)
+    assert state.stage is Stage.DONE
+    assert (Stage.DONE, True, None) in captures

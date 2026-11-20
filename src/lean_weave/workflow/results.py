@@ -29,6 +29,7 @@ class WorkflowStatus(str, Enum):
     FAILED = "failed"
     BUDGET_EXHAUSTED = "budget_exhausted"
     INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
 
 
 class _ResultModel(BaseModel):
@@ -73,12 +74,16 @@ def project_result(state: FeatureState, control: object | None) -> WorkflowResul
         status = WorkflowStatus.SUCCESS
         reason = _reason(terminal_reason, "completed")
     elif state.stage is Stage.FAILED:
-        status = (
-            WorkflowStatus.BUDGET_EXHAUSTED
-            if getattr(terminal_status, "value", terminal_status) == WorkflowStatus.BUDGET_EXHAUSTED.value
-            else WorkflowStatus.FAILED
-        )
-        reason = _reason(terminal_reason, "failed")
+        terminal_value = getattr(terminal_status, "value", terminal_status)
+        if terminal_value == WorkflowStatus.BUDGET_EXHAUSTED.value:
+            status = WorkflowStatus.BUDGET_EXHAUSTED
+            reason = _reason(terminal_reason, "budget_exhausted")
+        elif terminal_value == WorkflowStatus.CANCELLED.value:
+            status = WorkflowStatus.CANCELLED
+            reason = _reason(terminal_reason, "cancelled")
+        else:
+            status = WorkflowStatus.FAILED
+            reason = _reason(terminal_reason, "failed")
     elif state.stage is Stage.INTERRUPTED:
         status = WorkflowStatus.INTERRUPTED
         reason = _reason(terminal_reason, "interrupted")

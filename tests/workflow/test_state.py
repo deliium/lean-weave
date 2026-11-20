@@ -158,3 +158,68 @@ def test_terminal_result_projection_survives_reload(tmp_path):
     assert result.stage is Stage.DONE
     assert result.tasks[0].id == "1"
     assert reloaded.load("f") == state
+
+
+def test_control_record_defaults_for_legacy_envelopes(tmp_path):
+    store = JsonCheckpointStore(tmp_path)
+    state = _planned_state()
+    store.create_checkpoint(state, _control(store))
+    path = tmp_path / ".lean-weave" / "workflow" / "f.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    # Strip lifecycle fields to simulate a pre-v1-07 control record.
+    for key in ("mode", "review_gate", "continuation", "pinned_head", "lifecycle_version"):
+        payload["control"].pop(key, None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    envelope = store.load_checkpoint("f")
+    assert envelope.control.mode.value == "auto"
+    assert envelope.control.review_gate is None
+    assert envelope.control.continuation is None
+
+
+def test_plan_digest_ignores_mutable_task_progress():
+    from lean_weave.schemas import TaskStatus
+    from lean_weave.workflow.lifecycle import plan_digest
+
+    plan = FeaturePlan(
+        goal="g",
+        tasks=[ImplementationTask(id="1", title="edit", files=["a.py"])],
+    )
+    first = plan_digest(plan)
+    plan.tasks[0].status = TaskStatus.DONE
+    plan.tasks[0].outcome_digest = "sha256:" + "b" * 32
+    assert plan_digest(plan) == first
+    plan.tasks[0].files = ["b.py"]
+    assert plan_digest(plan) != first
+
+
+def test_expected_workspace_identity_for_archive_reads(tmp_path):
+    import pytest
+
+    from lean_weave.errors import StateCorrupt
+    from lean_weave.workflow.state import workspace_identity
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    store = JsonCheckpointStore(root)
+    store.create_checkpoint(_planned_state(), _control(store))
+    archive = JsonCheckpointStore(
+        tmp_path / "archive",
+        state_dir=".lean-weave",
+        expected_workspace=workspace_identity(root),
+    )
+    # The archived store is a different path; copy the payload into it.
+    (tmp_path / "archive" / ".lean-weave" / "workflow").mkdir(parents=True)
+    source = root / ".lean-weave" / "workflow" / "f.json"
+    (tmp_path / "archive" / ".lean-weave" / "workflow" / "f.json").write_bytes(
+        source.read_bytes()
+    )
+    assert archive.load_checkpoint("f").feature_id == "f"
+
+    bogus = JsonCheckpointStore(
+        tmp_path / "archive",
+        state_dir=".lean-weave",
+        expected_workspace="sha256:" + "0" * 64,
+    )
+    with pytest.raises(StateCorrupt):
+        bogus.load_checkpoint("f")

@@ -116,3 +116,31 @@ class InvalidToolRequest(ToolError):
 
 class ForbiddenTool(ToolError):
     """The tool request crosses an authorization or credential boundary."""
+
+
+class WorktreeGitError(LeanWeaveError):
+    """Safe worktree Git adapter failure. Messages are stable codes only."""
+
+
+class UnsupportedRepository(WorktreeGitError):
+    """Repository layout or local Git configuration is not supported."""
+
+
+class GitOperationError(WorktreeGitError):
+    """A bounded Git process failed, timed out, or returned unusable output."""
+
+
+class WorktreeError(LeanWeaveError):
+    """Safe worktree lifecycle failure. Messages are stable codes only."""
+
+
+class WorktreeBusy(WorktreeError):
+    """Another cooperative process holds the worktree or routing lease."""
+
+
+class WorktreeConflict(WorktreeError):
+    """Feature ID, branch, path, or registration already conflicts."""
+
+
+class WorktreeStale(WorktreeError):
+    """Registered worktree identity no longer matches the live checkout."""

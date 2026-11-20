@@ -22,7 +22,13 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl context build TASK [--path PATH ...] [--level map\|symbols\|ranges\|full] [--reason TEXT] [--json]` | Build a budgeted, provenance-bearing context pack |
 | `wl context inspect PATH [--symbol NAME \| --lines START:END] [--json]` | Safe file metadata or one admitted range |
 | `wl llm check` | Opt-in DeepSeek smoke test: one small fixed request plus safe usage output |
-| `wl feature` / `wl feature --help` | Display help only; no workflow execution |
+| `wl feature DESCRIPTION (--auto \| --review) [--worktree PATH]` | Start a feature inside an isolated linked worktree; `--worktree` adopts an existing clean checkout |
+| `wl status FEATURE` | Read-only workflow status, branch, changes, verification, usage, and next action |
+| `wl result FEATURE` | Read-only result view including bounded diff summary and terminal/archived state |
+| `wl resume FEATURE [--approve TOKEN]` | Resume an interrupted run or accept the outstanding review gate |
+| `wl cancel FEATURE` | Finalize an idle run or publish a durable cancellation request for an active run |
+| `wl worktree inspect FEATURE` | Read-only worktree routing and cleanliness inspection |
+| `wl worktree cleanup FEATURE --confirm` | Archive recognized state and remove an eligible clean managed worktree; never deletes the branch |
 | `wl --help` | Show commands and global options |
 
 Initialization and all help paths bypass config loading. This supports repair:

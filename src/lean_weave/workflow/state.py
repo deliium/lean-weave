@@ -27,15 +27,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from lean_weave.errors import StateConflict, StateCorrupt, StateError
 from lean_weave.logging_setup import get_logger
 from lean_weave.schemas import SCHEMA_VERSION, FeatureState
+from lean_weave.workflow.lifecycle import ContinuationCursor, ExecutionMode, ReviewGate
 from lean_weave.workflow.results import WorkflowStatus
 
 log = get_logger("workflow.state")
 
 ENVELOPE_VERSION = 1
 CONTROL_VERSION = 1
+LIFECYCLE_CONTROL_VERSION = 1
 MAX_STATE_BYTES = 1_048_576
 MAX_EFFECT_PATHS = 32
 MAX_FEATURE_ID_CHARS = 128
+_WORKSPACE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FEATURE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _RESERVED_FEATURE_IDS = frozenset({"__llm_probe__"})
 _SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION})
@@ -69,8 +72,13 @@ def normalize_feature_id(value: str) -> str:
     return value
 
 
-def _workspace_identity(root: Path) -> str:
+def workspace_identity(root: Path) -> str:
+    """Stable workspace identity for one resolved root path."""
+
     return "sha256:" + hashlib.sha256(str(root).encode("utf-8")).hexdigest()
+
+
+_workspace_identity = workspace_identity
 
 
 class _StateModel(BaseModel):
@@ -125,8 +133,20 @@ class ControlRecord(_StateModel):
     plan_spend: ScopeSpend = Field(default_factory=ScopeSpend)
     task_spend: dict[str, TaskSpend] = Field(default_factory=dict)
     pending_effect: PendingEffect | None = None
+    # Last durably committed edit whose task outcome checkpoint has not landed.
+    # Retained across later provider rounds; cleared atomically with task_done.
+    applied_effect: PendingEffect | None = None
     terminal_status: WorkflowStatus | None = None
     terminal_reason: str | None = Field(default=None, max_length=64)
+    # Optional lifecycle fields (v1-07). Absent on legacy envelopes → defaults.
+    lifecycle_version: int = Field(default=LIFECYCLE_CONTROL_VERSION, ge=1)
+    mode: ExecutionMode = ExecutionMode.AUTO
+    review_gate: ReviewGate | None = None
+    continuation: ContinuationCursor | None = None
+    pinned_head: str | None = Field(default=None, max_length=64)
+    # Durable in-flight stage marker. A crash that leaves this set means the
+    # stage outcome checkpoint never landed; resume must fail closed.
+    inflight_stage: str | None = Field(default=None, max_length=16)
 
 
 class CheckpointEnvelope(_StateModel):
@@ -154,6 +174,7 @@ class JsonCheckpointStore:
         *,
         state_dir: str = ".lean-weave",
         max_bytes: int = MAX_STATE_BYTES,
+        expected_workspace: str | None = None,
     ) -> None:
         try:
             self.root = Path(root).resolve(strict=False)
@@ -177,7 +198,12 @@ class JsonCheckpointStore:
             raise StateError("State size bound must be positive")
         self._max_bytes = max_bytes
         self._workflow = self._base / "workflow"
-        self.identity = _workspace_identity(self.root)
+        self.identity = workspace_identity(self.root)
+        # Archive readers pass the original worktree identity so archived
+        # checkpoints stay readable after the live checkout is removed.
+        if expected_workspace is not None and not _WORKSPACE_ID.fullmatch(expected_workspace):
+            raise StateError("Expected workspace identity is invalid")
+        self.expected_identity = expected_workspace or self.identity
         log.debug(
             "[State.store] root=%s state_dir=%s max_bytes=%s",
             "workspace",
@@ -295,7 +321,7 @@ class JsonCheckpointStore:
             raise StateCorrupt("Unsupported checkpoint envelope version")
         if envelope.control.version != CONTROL_VERSION:
             raise StateCorrupt("Unsupported checkpoint control version")
-        if envelope.workspace != self.identity:
+        if envelope.workspace != self.expected_identity:
             raise StateCorrupt("Checkpoint belongs to a different workspace")
         return envelope
 

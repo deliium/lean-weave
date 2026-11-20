@@ -117,7 +117,16 @@ class JsonlMetricsCollector:
             raise JournalError("Usage journal path escapes the state directory")
 
     @classmethod
-    def from_config(cls, config: Any, *, journal_name: str = JOURNAL_NAME) -> "JsonlMetricsCollector":
+    def from_config(
+        cls,
+        config: Any,
+        *,
+        journal_name: str = JOURNAL_NAME,
+        root: Path | None = None,
+    ) -> "JsonlMetricsCollector":
+        if root is not None:
+            state_dir = (Path(root) / config.workflow.state_dir).resolve()
+            return cls(state_dir, journal_name=journal_name)
         return cls(resolve_state_dir(config), journal_name=journal_name)
 
     @property

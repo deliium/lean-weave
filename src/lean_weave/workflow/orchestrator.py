@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from lean_weave.config.models import WorkflowConfig
@@ -23,6 +23,7 @@ from lean_weave.contracts import (
 from lean_weave.errors import (
     BudgetExceededError,
     DependencyUnavailable,
+    InvalidTransition,
     PlanValidationError,
     ProviderError,
     StateConflict,
@@ -38,6 +39,15 @@ from lean_weave.workflow.budget import (
     WorkflowBudget,
 )
 from lean_weave.workflow.instructions import load_instructions
+from lean_weave.workflow.lifecycle import (
+    BaselineFn,
+    BindingFn,
+    ExecutionMode,
+    capture_continuation,
+    parse_resume_decision,
+    publish_review_gate,
+    validate_review_approval,
+)
 from lean_weave.workflow.planning import (
     PlanPolicy,
     SingleTaskSpec,
@@ -99,6 +109,11 @@ class MinimalWorkflowOrchestrator:
         output_cap: int = 1024,
         instructions: Mapping[str, Sequence[str]] | None = None,
         journal: object | None = None,
+        mode: ExecutionMode = ExecutionMode.AUTO,
+        pinned_head: str | None = None,
+        baseline_fingerprint: BaselineFn | None = None,
+        binding_extra: BindingFn | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         if not checkpoint_capability(state_store):
             raise DependencyUnavailable("StateStore cannot provide atomic workflow checkpoints")
@@ -115,6 +130,11 @@ class MinimalWorkflowOrchestrator:
         self._output_cap = output_cap
         self._instructions = dict(instructions or {})
         self._journal = journal
+        self._mode = mode
+        self._pinned_head = pinned_head or ("0" * 40)
+        self._baseline_fingerprint = baseline_fingerprint
+        self._binding_extra = binding_extra
+        self._cancel_check = cancel_check
         self._state: FeatureState | None = None
         self._control: ControlRecord | None = None
 
@@ -130,10 +150,19 @@ class MinimalWorkflowOrchestrator:
             request=request,
             max_retries=self._config.max_retries,
         )
-        control = ControlRecord(feature_id=feature_id, workspace=self._workspace)
+        control = ControlRecord(
+            feature_id=feature_id,
+            workspace=self._workspace,
+            mode=self._mode,
+            pinned_head=self._pinned_head,
+        )
         self._store.create_checkpoint(state, control)  # type: ignore[attr-defined]
         self._state, self._control = state, control
-        log.info("[Orchestrator.run] feature=%s path=detailed stage=plan", feature_id)
+        log.info(
+            "[Orchestrator.run] feature=%s path=detailed stage=plan mode=%s",
+            feature_id,
+            self._mode.value,
+        )
         return self._drive()
 
     def run_simple(
@@ -152,19 +181,20 @@ class MinimalWorkflowOrchestrator:
             plan=plan,
             max_retries=self._config.max_retries,
         )
-        control = ControlRecord(feature_id=feature_id, workspace=self._workspace)
+        control = ControlRecord(
+            feature_id=feature_id,
+            workspace=self._workspace,
+            mode=ExecutionMode.AUTO,
+            pinned_head=self._pinned_head,
+        )
         self._store.create_checkpoint(state, control)  # type: ignore[attr-defined]
         self._state, self._control = state, control
         log.info("[Orchestrator.run] feature=%s path=simple stage=implement", feature_id)
         return self._drive()
 
     def resume(self, feature_id: str, decision: Any | None = None) -> FeatureState:
-        del decision
         envelope = self._store.load_checkpoint(normalize_feature_id(feature_id))  # type: ignore[attr-defined]
         self._state, self._control = envelope.state, envelope.control
-        if self._control.pending_effect is not None:
-            log.warning("[Orchestrator.resume] feature=%s outcome=unresolved_effect", feature_id)
-            return self._interrupt("unresolved_effect")
         if self._state.stage in {Stage.DONE, Stage.FAILED}:
             log.info(
                 "[Orchestrator.resume] feature=%s outcome=terminal stage=%s",
@@ -172,20 +202,47 @@ class MinimalWorkflowOrchestrator:
                 self._state.stage.value,
             )
             return self._state
+        if self._control.pending_effect is not None:
+            log.warning("[Orchestrator.resume] feature=%s outcome=unresolved_effect", feature_id)
+            return self._interrupt("unresolved_effect")
+        if self._control.applied_effect is not None:
+            log.warning("[Orchestrator.resume] feature=%s outcome=manual_inspection", feature_id)
+            return self._terminal(WorkflowStatus.FAILED, "manual_inspection")
+        if self._control.inflight_stage is not None:
+            log.warning("[Orchestrator.resume] feature=%s outcome=uncertain_effect", feature_id)
+            return self._terminal(WorkflowStatus.FAILED, "manual_inspection")
         if self._state.stage is Stage.INTERRUPTED:
             reason = (self._state.interrupt or {}).get("reason")
             if reason in {"unresolved_effect", "committed_unconfirmed"}:
                 log.warning("[Orchestrator.resume] feature=%s outcome=not_replayable", feature_id)
                 return self._state
+            gate = self._control.review_gate
+            if gate is not None and not gate.accepted:
+                if not self._accept_review(decision):
+                    return self._state
+            elif reason == "review_pending" and gate is None:
+                log.warning("[Orchestrator.resume] outcome=review_gate_missing")
+                return self._state
             refusal = self._approval_refusal()
             if refusal is not None:
                 return self._interrupt(refusal)
             self._state.interrupt = None
-            transition(self._state, "resume")
+            try:
+                self._restore_continuation()
+            except InvalidTransition:
+                return self._terminal(WorkflowStatus.FAILED, "ambiguous_continuation")
             self._control.terminal_status = None
             self._control.terminal_reason = None
             self._persist()
         else:
+            gate = self._control.review_gate
+            if (
+                gate is not None
+                and not gate.accepted
+                and self._control.mode is ExecutionMode.REVIEW
+            ):
+                if not self._accept_review(decision):
+                    return self._interrupt("review_pending")
             refusal = self._approval_refusal()
             if refusal is not None:
                 return self._interrupt(refusal)
@@ -210,6 +267,13 @@ class MinimalWorkflowOrchestrator:
                 return state
             if self._control is not None and self._control.pending_effect is not None:
                 return self._interrupt("unresolved_effect")
+            if self._cancel_requested():
+                log.info(
+                    "[Orchestrator.cancel] feature=%s stage=%s outcome=terminal",
+                    state.feature_id,
+                    state.stage.value,
+                )
+                return self._terminal(WorkflowStatus.CANCELLED, "cancelled")
             try:
                 if state.stage is Stage.PLAN:
                     self._plan_stage()
@@ -236,6 +300,8 @@ class MinimalWorkflowOrchestrator:
                 return self._interrupt("provider_error")
             except StateConflict:
                 return self._interrupt("state_error")
+            except InvalidTransition:
+                return self._terminal(WorkflowStatus.FAILED, "ambiguous_continuation")
         log.warning("[Orchestrator.drive] feature=%s outcome=loop_bound", state.feature_id)
         return self._terminal(WorkflowStatus.FAILED, "loop_bound")
 
@@ -245,6 +311,11 @@ class MinimalWorkflowOrchestrator:
     def _plan_stage(self) -> None:
         state = self._require_state()
         policy = self._require_policy()
+        control = self._control
+        baseline_before = self._capture_baseline()
+        if control is not None:
+            control.inflight_stage = Stage.PLAN.value
+            self._persist()
         bundle = self._context.build("plan", state)
         fragments = load_instructions("plan", self._instructions.get("plan"))
         request = build_plan_request(
@@ -267,6 +338,7 @@ class MinimalWorkflowOrchestrator:
             model=self._model,
             thinking=self._thinking,
             response_format=request.response_format,
+            cancel_check=self._cancel_check,
         )
         if outcome.overage:
             self._accumulate_metrics(outcome)
@@ -276,6 +348,10 @@ class MinimalWorkflowOrchestrator:
                 FEATURE_TOKEN_OVERAGE,
             )
             raise WorkflowBudgetExceeded(FEATURE_TOKEN_OVERAGE)
+        if outcome.cancelled:
+            self._accumulate_metrics(outcome)
+            self._terminal(WorkflowStatus.CANCELLED, "cancelled")
+            return
         if outcome.exhausted:
             self._accumulate_metrics(outcome)
             self._terminal(WorkflowStatus.FAILED, "plan_call_unavailable")
@@ -287,9 +363,36 @@ class MinimalWorkflowOrchestrator:
             "structured": outcome.structured,
         }
         plan = parse_plan_response(response, policy)
+        baseline_after = self._capture_baseline()
+        if baseline_after != baseline_before:
+            log.warning("[Orchestrator.plan] outcome=baseline_drift")
+            self._terminal(WorkflowStatus.FAILED, "baseline_drift")
+            return
         state.plan = plan
         state.active_task_id = None
         transition(state, "planned")
+        if control is not None:
+            control.inflight_stage = None
+        if control is not None and control.mode is ExecutionMode.REVIEW:
+            gate = publish_review_gate(
+                feature_id=state.feature_id,
+                plan=plan,
+                policy=policy,
+                workspace=self._workspace,
+                head=control.pinned_head or self._pinned_head,
+                baseline_fingerprint=baseline_after,
+                extra=self._binding_material(),
+            )
+            control.review_gate = gate
+            # One atomic checkpoint: plan + gate, then pause before any write.
+            self._persist()
+            log.info(
+                "[Orchestrator.plan] feature=%s tasks=%s outcome=review_pending",
+                state.feature_id,
+                len(plan.tasks),
+            )
+            self._interrupt("review_pending")
+            return
         self._persist()
         log.info(
             "[Orchestrator.plan] feature=%s tasks=%s calls=%s",
@@ -305,6 +408,9 @@ class MinimalWorkflowOrchestrator:
         state = self._require_state()
         if state.plan is None:
             self._terminal(WorkflowStatus.FAILED, "missing_plan")
+            return
+        if self._review_blocks_effects():
+            self._interrupt("review_pending")
             return
         refusal = self._approval_refusal()
         if refusal is not None:
@@ -346,19 +452,21 @@ class MinimalWorkflowOrchestrator:
             result = self._verification.run(state)
         except Exception:  # noqa: BLE001 - child failure becomes a stable code
             try:
-                self._clear_effect(operation_id)
+                self._drop_effect(operation_id)
             except Exception:  # noqa: BLE001 - keep interrupt-safe state
                 log.warning("[Orchestrator.verify] outcome=marker_clear_failed")
             log.warning("[Orchestrator.verify] feature=%s outcome=error", state.feature_id)
             self._terminal(WorkflowStatus.FAILED, "verification_error")
             return
+        state.verification = result
+        # Clear the check guard in the same checkpoint that records the
+        # outcome, transition, spend and terminal/interrupt reason.
         try:
-            self._clear_effect(operation_id)
+            self._drop_effect(operation_id)
         except Exception:  # noqa: BLE001 - fail closed on unproven state
             log.warning("[Orchestrator.verify] outcome=marker_clear_failed")
             self._terminal(WorkflowStatus.FAILED, "state_error")
             return
-        state.verification = result
         if result.status.value in {"pass", "warn"} and not result.blocking:
             transition(state, "pass")
             self._terminal(WorkflowStatus.SUCCESS, "verification_passed")
@@ -402,6 +510,9 @@ class MinimalWorkflowOrchestrator:
         if state.plan is None or state.verification is None or not state.active_task_id:
             self._terminal(WorkflowStatus.FAILED, "invalid_retry_state")
             return
+        if self._review_blocks_effects():
+            self._interrupt("review_pending")
+            return
         refusal = self._approval_refusal()
         if refusal is not None:
             self._terminal(WorkflowStatus.FAILED, refusal)
@@ -439,6 +550,9 @@ class MinimalWorkflowOrchestrator:
         bound = tools.bind_task(task.files).with_effects(
             self._mark_patch_effect, self._clear_effect
         )
+        if self._control is not None:
+            self._control.inflight_stage = stage
+            self._persist()
         outcome = run_tool_loop(
             self._provider,
             self._budget(),
@@ -453,10 +567,21 @@ class MinimalWorkflowOrchestrator:
             output_cap=self._output_cap,
             model=self._model,
             thinking=self._thinking,
+            cancel_check=self._cancel_check,
         )
         self._accumulate_metrics(outcome)
         if outcome.overage:
             raise WorkflowBudgetExceeded(FEATURE_TOKEN_OVERAGE)
+        if outcome.cancelled:
+            control = self._control
+            if (
+                control is not None
+                and control.pending_effect is not None
+                and control.pending_effect.confirmed
+            ):
+                control.pending_effect = None
+            self._terminal(WorkflowStatus.CANCELLED, "cancelled")
+            return
         if outcome.unconfirmed:
             effect = None
             if self._control is None or self._control.pending_effect is None:
@@ -472,6 +597,16 @@ class MinimalWorkflowOrchestrator:
         if outcome.exhausted:
             self._terminal(WorkflowStatus.FAILED, "task_loop_exhausted")
             return
+        if self._control is not None and self._control.pending_effect is not None:
+            control = self._control
+            if control.pending_effect.confirmed:
+                control.pending_effect = None
+            else:
+                self._interrupt("unresolved_effect")
+                return
+        if self._control is not None:
+            self._control.inflight_stage = None
+            self._control.applied_effect = None
         task.status = TaskStatus.DONE
         task.outcome_digest = _digest(outcome)
         state.active_task_id = None
@@ -496,6 +631,7 @@ class MinimalWorkflowOrchestrator:
         if self._control is not None:
             self._control.terminal_status = status
             self._control.terminal_reason = reason
+            self._control.inflight_stage = None
         self._persist()
         return state
 
@@ -519,6 +655,18 @@ class MinimalWorkflowOrchestrator:
 
     def _interrupt(self, reason: str, *, effect: PendingEffect | None = None) -> FeatureState:
         state = self._require_state()
+        if self._control is not None and state.stage is not Stage.INTERRUPTED:
+            tasks = list(state.plan.tasks) if state.plan is not None else []
+            self._control.continuation = capture_continuation(
+                state.stage,
+                state.active_task_id,
+                tasks,
+            )
+            log.debug(
+                "[Orchestrator.continuation] feature=%s stage=%s",
+                state.feature_id,
+                state.stage.value,
+            )
         state.stage = Stage.INTERRUPTED
         state.interrupt = {
             "reason": _reason(reason, "interrupted"),
@@ -529,6 +677,9 @@ class MinimalWorkflowOrchestrator:
                 self._control.pending_effect = effect
             self._control.terminal_status = WorkflowStatus.INTERRUPTED
             self._control.terminal_reason = _reason(reason, "interrupted")
+            # A caught interruption is a known stop point; a process death
+            # leaves the marker set and forces manual inspection on resume.
+            self._control.inflight_stage = None
         self._persist()
         log.warning(
             "[Orchestrator.interrupt] feature=%s reason=%s task=%s",
@@ -537,6 +688,47 @@ class MinimalWorkflowOrchestrator:
             state.active_task_id,
         )
         return state
+
+    def _restore_continuation(self) -> None:
+        state = self._require_state()
+        control = self._control
+        if control is None:
+            transition(state, "resume")
+            return
+        cursor = control.continuation
+        if cursor is None:
+            # Legacy interruptions without a cursor only safely resume to IMPLEMENT.
+            transition(state, "resume")
+            return
+        if cursor.stage not in {Stage.PLAN, Stage.IMPLEMENT, Stage.VERIFY, Stage.RETRY}:
+            log.warning("[Orchestrator.resume] outcome=ambiguous_continuation")
+            raise InvalidTransition("ambiguous_continuation")
+        if state.plan is not None and cursor.task_status:
+            for task in state.plan.tasks:
+                saved = cursor.task_status.get(task.id)
+                if saved is not None:
+                    try:
+                        task.status = TaskStatus(saved)
+                    except ValueError:
+                        log.warning("[Orchestrator.resume] outcome=ambiguous_continuation")
+                        raise InvalidTransition("ambiguous_continuation") from None
+        state.stage = cursor.stage
+        state.active_task_id = cursor.active_task_id
+        control.continuation = None
+        log.debug(
+            "[Orchestrator.continuation] feature=%s restored=%s",
+            state.feature_id,
+            cursor.stage.value,
+        )
+
+    def _cancel_requested(self) -> bool:
+        if self._cancel_check is None:
+            return False
+        try:
+            return bool(self._cancel_check())
+        except Exception:  # noqa: BLE001 - fail closed on cancel probe errors
+            log.warning("[Orchestrator.cancel] outcome=cancel_check_failed")
+            return False
 
     # ------------------------------------------------------------------
     # Lookup helpers
@@ -562,6 +754,70 @@ class MinimalWorkflowOrchestrator:
             log.warning("[Orchestrator.preflight] outcome=refused code=%s", code)
             return code
         return None
+
+    def _review_blocks_effects(self) -> bool:
+        control = self._control
+        if control is None or control.mode is not ExecutionMode.REVIEW:
+            return False
+        gate = control.review_gate
+        return gate is None or not gate.accepted
+
+    def _capture_baseline(self) -> str:
+        if self._baseline_fingerprint is None:
+            return "sha256:" + ("0" * 64)
+        value = self._baseline_fingerprint()
+        if not isinstance(value, str) or not value.startswith("sha256:"):
+            raise DependencyUnavailable("baseline_fingerprint_invalid")
+        return value
+
+    def _binding_material(self) -> Mapping[str, str]:
+        if self._binding_extra is None:
+            return {}
+        material = self._binding_extra()
+        return {str(key): str(value) for key, value in material.items()}
+
+    def _accept_review(self, decision: Any | None) -> bool:
+        state = self._require_state()
+        control = self._control
+        if control is None or state.plan is None:
+            return False
+        gate = control.review_gate
+        if gate is None:
+            log.warning("[Orchestrator.resume] outcome=review_gate_missing")
+            self._interrupt("review_gate_missing")
+            return False
+        if gate.accepted:
+            log.debug("[Orchestrator.resume] outcome=review_already_accepted")
+            return True
+        parsed = parse_resume_decision(decision)
+        if parsed is None or parsed.kind != "approve_review":
+            log.warning("[Orchestrator.resume] outcome=review_token_required")
+            self._interrupt("review_pending")
+            return False
+        policy = self._require_policy()
+        try:
+            baseline = self._capture_baseline()
+        except DependencyUnavailable:
+            self._interrupt("stale_baseline")
+            return False
+        refusal = validate_review_approval(
+            gate,
+            token=parsed.token,
+            feature_id=state.feature_id,
+            plan=state.plan,
+            policy=policy,
+            workspace=self._workspace,
+            head=control.pinned_head or self._pinned_head,
+            baseline_fingerprint=baseline,
+            extra=self._binding_material(),
+        )
+        if refusal is not None:
+            self._interrupt(refusal)
+            return False
+        control.review_gate = gate.model_copy(update={"accepted": True, "token": None})
+        self._persist()
+        log.info("[Orchestrator.resume] feature=%s outcome=review_accepted", state.feature_id)
+        return True
 
     def _budget(self) -> WorkflowBudget:
         control = self._control
@@ -602,7 +858,10 @@ class MinimalWorkflowOrchestrator:
         control = self._control
         if control is None:
             raise DependencyUnavailable("No feature control record is loaded")
-        if control.pending_effect is not None:
+        existing = control.pending_effect
+        if existing is not None and not (
+            existing.kind is EffectKind.PATCH and existing.confirmed
+        ):
             raise StateConflict("An effect is already pending for this feature")
         control.pending_effect = PendingEffect(
             kind=EffectKind.PATCH,
@@ -614,7 +873,28 @@ class MinimalWorkflowOrchestrator:
         )
         self._persist()
 
-    def _clear_effect(self, operation_id: str) -> None:
+    def _clear_effect(self, operation_id: str, committed: bool = True) -> None:
+        """Resolve a patch guard; committed edits stay guarded until task completion."""
+
+        control = self._control
+        if control is None:
+            raise DependencyUnavailable("No feature control record is loaded")
+        pending = control.pending_effect
+        if pending is None:
+            return
+        if pending.operation_id != operation_id:
+            raise StateConflict("Pending effect identity does not match")
+        if committed and pending.kind is EffectKind.PATCH:
+            control.applied_effect = pending.model_copy(update={"confirmed": True})
+            control.pending_effect = None
+            self._persist()
+            return
+        control.pending_effect = None
+        self._persist()
+
+    def _drop_effect(self, operation_id: str) -> None:
+        """Remove one matching guard without persisting a separate checkpoint."""
+
         control = self._control
         if control is None:
             raise DependencyUnavailable("No feature control record is loaded")
@@ -624,7 +904,6 @@ class MinimalWorkflowOrchestrator:
         if pending.operation_id != operation_id:
             raise StateConflict("Pending effect identity does not match")
         control.pending_effect = None
-        self._persist()
 
 
 def _append_trusted_instructions(messages: list[Any], fragments: Sequence[str]) -> list[Any]:

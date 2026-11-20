@@ -90,15 +90,25 @@ surfaces under fixed names for the orchestrator without widening approvals.
 `workflow/` is the MVP 1 minimal deterministic orchestrator. `state.py` owns
 contained, atomic, version-checked checkpoints under `.lean-weave/workflow/`
 with a single-writer lease and a private control envelope; `results.py`
-projects a typed `WorkflowResult`. `instructions.py` loads only bounded,
-registered stage fragments and `planning.py` validates a `FeaturePlan` before
-any write. `budget.py` books conservative reservations before dispatch and
-settles them against verified usage; `tool_loop.py` runs a bounded,
-ephemeral tool loop. `stages.py` owns transition policy and `orchestrator.py`
-drives plan → implement → verify → retry. `app.py::create_orchestrator` is the
-lazy wiring seam. Automatic writes require a caller `ToolApproval`, and checks
-that execute workspace code require an injected `IsolationBackend`; there is
-no direct-execution fallback. Public feature CLI wiring remains separate.
+projects a typed `WorkflowResult`. `lifecycle.py` adds optional review-gate,
+continuation, and in-flight/applied-effect fields on the control record.
+`session.py` composes worktree provisioning with `create_orchestrator` for the
+public CLI, freezes approvals, and reads archived terminal state.
+`instructions.py` loads only bounded, registered stage fragments and
+`planning.py` validates a `FeaturePlan` before any write. `budget.py` books
+conservative reservations before dispatch and settles them against verified
+usage; `tool_loop.py` runs a bounded, ephemeral tool loop with cancel checks.
+`stages.py` owns transition policy and `orchestrator.py` drives plan →
+implement → verify → retry, keeping effect guards until the outcome checkpoint
+lands. `app.py::create_orchestrator` is the lazy wiring seam and accepts an
+explicit `workspace_root`. Automatic writes require a caller `ToolApproval`,
+and checks that execute workspace code require an injected
+`IsolationBackend`; there is no direct-execution fallback.
+
+`worktree/` owns the fixed Git adapter, routing registry under the Git common
+directory, and `WorktreeManager` lifecycle (create / adopt / inspect /
+cleanup). Managed worktrees live in an owner-only sibling parent outside the
+source checkout. Routing never stores plans or budgets.
 
 ## ADRs
 

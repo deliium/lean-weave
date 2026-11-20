@@ -43,6 +43,7 @@ class ToolLoopOutcome:
     exhausted: bool = False
     overage: bool = False
     unconfirmed: bool = False
+    cancelled: bool = False
     events: tuple[ToolEvent, ...] = field(default_factory=tuple)
     final_message: Mapping[str, Any] | None = None
     usage: TokenUsage = field(default_factory=TokenUsage)
@@ -107,6 +108,7 @@ def run_tool_loop(
     thinking: str = "disabled",
     response_format: Mapping[str, Any] | None = None,
     reasoning_effort: str | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ToolLoopOutcome:
     if max_rounds < 1:
         raise WorkflowBudgetExceeded("tool_round_limit")
@@ -117,6 +119,22 @@ def run_tool_loop(
     thinking_enabled = thinking == "enabled"
 
     for round_index in range(max_rounds):
+        if cancel_check is not None and cancel_check():
+            log.info(
+                "[Workflow.loop] feature=%s scope=%s round=%s outcome=cancelled",
+                feature_id,
+                scope,
+                round_index + 1,
+            )
+            return ToolLoopOutcome(
+                content=None,
+                structured=None,
+                rounds=round_index,
+                calls=calls,
+                cancelled=True,
+                events=tuple(events),
+                usage=usage_total,
+            )
         request: LLMRequest = {
             "feature_id": feature_id,
             "stage": stage,  # type: ignore[typeddict-item]
@@ -246,6 +264,21 @@ def run_tool_loop(
             arguments = function.get("arguments") if isinstance(function, Mapping) else None
             if not isinstance(call_id, str) or not isinstance(name, str):
                 continue
+            if cancel_check is not None and cancel_check():
+                log.info(
+                    "[Workflow.loop] feature=%s scope=%s outcome=cancelled_before_tool",
+                    feature_id,
+                    scope,
+                )
+                return ToolLoopOutcome(
+                    content=None,
+                    structured=None,
+                    rounds=round_index + 1,
+                    calls=calls,
+                    cancelled=True,
+                    events=tuple(events),
+                    usage=usage_total,
+                )
             if index >= max_calls_per_batch:
                 result = ToolCallResult(
                     status="invalid",

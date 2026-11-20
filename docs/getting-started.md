@@ -50,11 +50,22 @@ adds complete AST spans; `--level full` requires exactly one path and a
 digest. Budgets and exclusions are configured under `context` in
 `.lean-weave/config.yaml`.
 
+## Feature workflow (worktree + CLI)
+
+Public feature commands require Git and an operator config **outside** the
+repository. See [Worktree workflow](worktree-workflow.md).
+
+```bash
+uv run wl --config /secure/operator.yaml feature "describe the change" --review
+uv run wl status <feature-id>
+uv run wl result <feature-id>
+```
+
 ## Library workflow entry point
 
-The minimal orchestrator is a library seam today; the feature CLI is not wired
-yet. Writes and checks require an explicit caller approval snapshot, so YAML
-alone never authorizes them.
+The minimal orchestrator remains a library seam. Writes and checks still
+require an explicit caller approval snapshot, so YAML alone never authorizes
+them.
 
 ```python
 from pathlib import Path

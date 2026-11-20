@@ -43,7 +43,7 @@ MAX_TOOL_ARGUMENT_CHARS = 200_000
 FIXED_TOOL_NAMES = frozenset({"read_range", "read_symbol", "apply_patch"})
 
 BeforeEffect = Callable[[str, str | None, list[str]], None]
-AfterEffect = Callable[[str], None]
+AfterEffect = Callable[[str, bool], None]
 
 TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     {
@@ -278,7 +278,7 @@ class WorkflowTools:
         if isinstance(result, ToolFailure):
             if self._after_patch is not None:
                 try:
-                    self._after_patch(operation_id)
+                    self._after_patch(operation_id, False)
                 except Exception:  # noqa: BLE001 - no edit was committed
                     log.warning("[Workflow.tools] operation=apply_patch outcome=marker_clear_failed")
             log.debug("[Workflow.tools] operation=apply_patch outcome=%s", result.status)
@@ -294,7 +294,7 @@ class WorkflowTools:
             )
         if self._after_patch is not None:
             try:
-                self._after_patch(operation_id)
+                self._after_patch(operation_id, True)
             except Exception:  # noqa: BLE001 - keep the marker for a safe interrupt
                 log.warning("[Workflow.tools] operation=apply_patch outcome=marker_clear_failed")
         log.info(

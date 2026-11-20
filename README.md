@@ -2,7 +2,7 @@
 
 > Token-efficient AI coding pipeline — plan, implement, verify, and retry with structured state and minimal LLM tokens.
 
-lean-weave is building a single-process feature workflow using DeepSeek and deterministic local verification. **v1-06** adds the minimal deterministic orchestrator: durable checkpoints, plan policy, bounded tool loops, per-scope budgets, and typed results. The feature CLI wiring is the next step.
+lean-weave is a single-process feature workflow using DeepSeek and deterministic local verification. **v1-07** exposes the orchestrator through `wl feature` with isolated Git worktrees, `--auto` / `--review` modes, and explicit resume/cancel/status commands.
 
 ## Quick Start
 
@@ -50,6 +50,7 @@ uv run wl feature --help
 | [Architecture](docs/architecture.md) | Components, orchestrator decision, boundaries |
 | [CLI Reference](docs/cli.md) | Commands, configuration, errors, injection |
 | [Code tools](docs/code-tools.md) | Offline reads, patches, checks, and Git metadata |
+| [Worktree workflow](docs/worktree-workflow.md) | Feature CLI, approvals, cancel, cleanup |
 
 ### Agent artifacts
 
