@@ -192,6 +192,33 @@ def test_retry_ignores_arbitrary_diagnostics_and_forbidden_paths(provider_projec
     )
 
 
+def test_retry_renders_only_validated_blockers(provider_project: Path):
+    verification = VerificationResult(
+        status=VerificationStatus.FAIL,
+        blocking=True,
+        affected_files=["pkg/a.py"],
+        blockers=[
+            {"code": "E999", "path": "pkg/a.py", "line": 2},
+            {"code": "E999", "path": "pkg/a.py", "line": 2},
+            {"code": "UNRECOGNIZED", "path": "pkg/a.py", "line": 1},
+            {"code": "E999", "path": "../outside.py", "line": 1},
+            {"code": "E999", "path": "noise.py", "line": 1},
+            {"code": "F401", "path": "pkg/a.py", "line": 0},
+        ],
+    )
+    provider = DeterministicContextProvider(provider_project)
+    state = _state(Stage.RETRY, verification=verification)
+    bundle = provider.build("retry", state)
+    rendered = "\n".join(message["content"] or "" for message in bundle["messages"])
+    assert rendered.count('"E999"') == 1
+    assert '"F401"' in rendered
+    assert '"line": null' in rendered
+    assert "'../outside.py'" not in rendered
+    assert "'noise.py'" not in rendered
+    assert "pkg/a.py" in rendered
+    assert set(bundle["file_excerpts"]) == {"pkg/a.py"}
+
+
 def test_provider_does_not_mutate_state(provider_project: Path):
     provider = DeterministicContextProvider(provider_project)
     state = _state(Stage.IMPLEMENT)

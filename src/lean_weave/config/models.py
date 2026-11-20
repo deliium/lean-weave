@@ -56,6 +56,12 @@ class WorkflowConfig(ConfigModel):
     state_dir: str = ".lean-weave"
     max_retries: int = Field(default=2, ge=0)
     feature_token_budget: int = Field(default=20000, gt=0)
+    max_plan_calls: int = Field(default=1, ge=0, le=8)
+    max_plan_tokens: int = Field(default=4000, gt=0)
+    max_task_llm_calls: int = Field(default=6, ge=1, le=64)
+    max_task_tokens: int = Field(default=5000, gt=0)
+    max_tool_rounds: int = Field(default=4, ge=0, le=32)
+    max_tool_calls_per_batch: int = Field(default=4, ge=1, le=32)
 
     @field_validator("state_dir")
     @classmethod

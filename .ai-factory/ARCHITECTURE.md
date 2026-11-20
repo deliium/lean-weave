@@ -84,8 +84,21 @@ reads, whole symbols, and literal symbol search through `python_index.py`.
 `git_diff.py` returns staged or unstaged path/status metadata from an isolated
 read-only Git subprocess. `verify/process.py` captures a fixed argv with a
 deadline and byte cap; `verify/checks.py` turns recognized diagnostics into
-template summaries. Neither package is mounted on `AppContext`, the CLI, or
-the `CodeExecutor` / `VerificationRunner` protocols.
+template summaries. `workflow/tools.py` and `verify/runner.py` bind these
+surfaces under fixed names for the orchestrator without widening approvals.
+
+`workflow/` is the MVP 1 minimal deterministic orchestrator. `state.py` owns
+contained, atomic, version-checked checkpoints under `.lean-weave/workflow/`
+with a single-writer lease and a private control envelope; `results.py`
+projects a typed `WorkflowResult`. `instructions.py` loads only bounded,
+registered stage fragments and `planning.py` validates a `FeaturePlan` before
+any write. `budget.py` books conservative reservations before dispatch and
+settles them against verified usage; `tool_loop.py` runs a bounded,
+ephemeral tool loop. `stages.py` owns transition policy and `orchestrator.py`
+drives plan → implement → verify → retry. `app.py::create_orchestrator` is the
+lazy wiring seam. Automatic writes require a caller `ToolApproval`, and checks
+that execute workspace code require an injected `IsolationBackend`; there is
+no direct-execution fallback. Public feature CLI wiring remains separate.
 
 ## ADRs
 

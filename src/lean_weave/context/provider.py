@@ -58,6 +58,8 @@ _STAGE_CONSTRAINTS = {
 }
 
 _ALLOWED_METADATA_KEYS = frozenset({"description", "architecture"})
+_REPAIRABLE_DIAGNOSTIC_CODES = frozenset({"E999", "F401", "F841", "E501", "PY001"})
+_MAX_RETRY_BLOCKERS = 8
 
 
 class DeterministicContextProvider:
@@ -264,6 +266,38 @@ class DeterministicContextProvider:
         log.debug("[Context.provider] stage=implement paths=%s scope=%s", len(allowed), len(scope))
         return result
 
+    def _retry_blockers(self, verification, eligible: set[str]) -> list[dict[str, object]]:
+        """Keep only bounded, recognized codes at validated task-relative paths."""
+
+        chosen: list[dict[str, object]] = []
+        seen: set[tuple[str, str, int]] = set()
+        for blocker in verification.blockers:
+            if not isinstance(blocker, Mapping):
+                continue
+            code = blocker.get("code")
+            if not isinstance(code, str) or code not in _REPAIRABLE_DIAGNOSTIC_CODES:
+                continue
+            path = blocker.get("path")
+            if not isinstance(path, str):
+                continue
+            try:
+                safe = normalize_relative_path(path)
+            except Exception:
+                continue
+            if safe not in eligible:
+                continue
+            line = blocker.get("line")
+            if isinstance(line, bool) or not isinstance(line, int) or line < 1:
+                line = None
+            key = (code, safe, line or 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            chosen.append({"code": code, "path": safe, "line": line})
+            if len(chosen) >= _MAX_RETRY_BLOCKERS:
+                break
+        return chosen
+
     def _retry(self, state: FeatureState) -> BuildResult:
         task, plan = self._active_task(state)
         verification = state.verification
@@ -273,7 +307,19 @@ class DeterministicContextProvider:
             raise InvalidContextRequest("Retry context requires a failed verification result")
         repository = self._repository()
         eligible = set(repository.inventory().files)
-        affected = [path for path in dict.fromkeys(verification.affected_files) if path in eligible]
+        task_eligible = {path for path in task.files if path in eligible}
+        blockers = self._retry_blockers(verification, task_eligible)
+        affected = list(
+            dict.fromkeys(
+                path
+                for path in verification.affected_files
+                if path in task_eligible
+            )
+        )
+        for blocker in blockers:
+            path = blocker.get("path")
+            if isinstance(path, str) and path not in affected:
+                affected.append(path)
         task_python = [path for path in task.files if path in eligible and is_python(path)]
         # Read approved task sources only to resolve imports; emit affected only.
         index, scope, _ = self._targeted_index(
@@ -285,6 +331,7 @@ class DeterministicContextProvider:
                     "status": verification.status.value,
                     "blocking": verification.blocking,
                     "affected_files": affected,
+                    "blockers": blockers,
                 },
                 sort_keys=True,
             )

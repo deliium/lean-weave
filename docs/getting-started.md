@@ -48,7 +48,63 @@ uv run wl context inspect src/lean_weave/app.py --symbol create_llm_provider
 adds complete AST spans; `--level full` requires exactly one path and a
 `--reason`. Every excerpt includes its path, original line range, and snapshot
 digest. Budgets and exclusions are configured under `context` in
-`.lean-weave/config.yaml`. Workflows are not wired to context in this milestone.
+`.lean-weave/config.yaml`.
+
+## Library workflow entry point
+
+The minimal orchestrator is a library seam today; the feature CLI is not wired
+yet. Writes and checks require an explicit caller approval snapshot, so YAML
+alone never authorizes them.
+
+```python
+from pathlib import Path
+
+from lean_weave.app import build_app_context, create_orchestrator
+from lean_weave.executor.approval import approve_tools
+from lean_weave.workflow.planning import SingleTaskSpec
+
+context = build_app_context()
+approval = approve_tools(
+    Path.cwd(),
+    context.config,
+    allow_writes=True,
+    allow_checks=True,
+)
+orchestrator = create_orchestrator(
+    context,
+    approval=approval,
+    check_ids=["parse"],  # must exist in tools.checks
+)
+state = orchestrator.run_simple(
+    "feat-example",
+    "add one marker comment",
+    SingleTaskSpec(
+        id="1",
+        title="edit one file",
+        file="src/lean_weave/app.py",
+        check_ids=["parse"],
+    ),
+)
+result = orchestrator.result("feat-example")
+print(result.status.value, result.reason)
+```
+
+Result statuses:
+
+| Status | Meaning |
+|--------|---------|
+| `success` | Every required gate passed; no later LLM call is made |
+| `failed` | Explicit verification/plan/approval failure, including retry exhaustion |
+| `budget_exhausted` | A call or token limit denied the next dispatch |
+| `interrupted` | Provider error, unresolved effect, or approval revalidation needs a resume |
+
+Checks that execute workspace code need an injected offline isolation backend;
+without one the workflow refuses before editing. Patches are limited to the
+active task's approved files and current revision. A committed patch whose
+durability cannot be confirmed interrupts with its effect marker intact and is
+never replayed. Durable checkpoints live under `.lean-weave/workflow/`; use
+`resume(feature_id)` after a restart and `result(feature_id)` for a read-only
+summary.
 
 ## Optional live DeepSeek check
 

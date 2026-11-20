@@ -70,6 +70,42 @@ class ContextBudgetError(ContextError):
     """The required prompt envelope exceeds the configured stage budget."""
 
 
+class StateError(LeanWeaveError):
+    """Durable workflow state is unreadable, conflicting, or unwritable."""
+
+
+class StateConflict(StateError):
+    """A feature already exists or another writer holds its lease."""
+
+
+class StateCorrupt(StateError):
+    """Persisted workflow state is malformed, incompatible, or out of bounds."""
+
+
+class WorkflowError(LeanWeaveError):
+    """Safe workflow failure. Messages carry stable codes, never payloads."""
+
+
+class InvalidTransition(WorkflowError):
+    """The requested state-machine transition is not allowed."""
+
+
+class PlanValidationError(WorkflowError):
+    """A generated or caller-supplied plan failed policy validation."""
+
+
+class InstructionError(WorkflowError):
+    """An instruction fragment selection is unknown or over budget."""
+
+
+class WorkflowBudgetExceeded(WorkflowError):
+    """A workflow-stage call or token allowance denied dispatch."""
+
+
+class EffectUnresolved(WorkflowError):
+    """An in-flight effect cannot be proven complete and must not replay."""
+
+
 class ToolError(LeanWeaveError):
     """Safe code-tool failure. Messages are stable codes, never payloads."""
 

@@ -2,12 +2,16 @@ from pathlib import Path
 
 import pytest
 
-from lean_weave.app import build_app_context, create_llm_provider
-from lean_weave.config import ConfigError, init_config
+from lean_weave.app import build_app_context, create_llm_provider, create_orchestrator
+from lean_weave.config import AppConfig, ConfigError, init_config
 from lean_weave.errors import DependencyUnavailable
+from lean_weave.executor.approval import approve_tools
 from lean_weave.metrics.jsonl import JsonlMetricsCollector
 from lean_weave.providers.deepseek import DeepSeekProvider
+from lean_weave.providers.mock import MockLLMProvider
 from lean_weave.schemas import FeatureState
+from lean_weave.workflow.orchestrator import MinimalWorkflowOrchestrator
+from lean_weave.workflow.state import JsonCheckpointStore
 
 
 class FakeStore:
@@ -122,3 +126,71 @@ def test_injected_atomic_journal_is_used(tmp_path, monkeypatch):
     provider = create_llm_provider(context)
     assert provider._journal is journal
     provider.close()
+
+
+def test_orchestrator_shares_default_gateway_journal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.py").write_text("value = 1\n", encoding="utf-8")
+    approval = approve_tools(
+        workspace,
+        AppConfig(),
+        allow_writes=True,
+        allow_checks=True,
+    )
+    context = build_app_context(
+        state_store=JsonCheckpointStore(workspace),
+        context_provider=object(),
+    )
+
+    orchestrator = create_orchestrator(context, approval=approval, check_ids=[])
+
+    assert isinstance(orchestrator._provider, DeepSeekProvider)
+    assert isinstance(orchestrator._journal, JsonlMetricsCollector)
+    assert orchestrator._provider._journal is orchestrator._journal
+    assert not (tmp_path / ".lean-weave" / "metrics").exists()
+
+
+def test_orchestrator_lazy_wiring_requires_checkpoints_and_approval(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.py").write_text("value = 1\n", encoding="utf-8")
+    config = AppConfig()
+    approval = approve_tools(
+        workspace,
+        config,
+        allow_writes=True,
+        allow_checks=True,
+    )
+    context = build_app_context(
+        llm_provider=MockLLMProvider([]),
+        state_store=JsonCheckpointStore(workspace),
+        context_provider=object(),
+    )
+    assert not (tmp_path / ".lean-weave" / "metrics").exists()
+    orchestrator = create_orchestrator(
+        context, approval=approval, check_ids=["parse"], model="mock"
+    )
+    assert isinstance(orchestrator, MinimalWorkflowOrchestrator)
+    assert not (tmp_path / ".lean-weave" / "metrics").exists()
+
+    injected = build_app_context(orchestrator=object())
+    assert create_orchestrator(injected) is injected.orchestrator
+
+    legacy = build_app_context(
+        llm_provider=MockLLMProvider([]),
+        context_provider=object(),
+        state_store=FakeStore(),
+    )
+    with pytest.raises(DependencyUnavailable, match="checkpoints"):
+        create_orchestrator(legacy, approval=approval, check_ids=["parse"])
+
+    no_approval = build_app_context(
+        llm_provider=MockLLMProvider([]),
+        context_provider=object(),
+        state_store=JsonCheckpointStore(tmp_path),
+    )
+    with pytest.raises(DependencyUnavailable, match="approved check"):
+        create_orchestrator(no_approval, check_ids=["parse"])

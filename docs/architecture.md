@@ -15,7 +15,7 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Deterministic verification** (compile / tests / schema / file checks) preferred over LLM review
 - **Stage-scoped context** with hard bans on secrets, full skill trees, and cross-stage transcripts
 - **Deterministic context retrieval** — bounded repository inventory, AST symbols/imports, literal search with an `rg`/Python fallback, lexicographic ranking, and prompt budgets; no embeddings, LLM calls, or persistent index
-- **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata. They are not wired to the workflow contracts or the CLI
+- **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata. The workflow consumes them only through an explicit caller approval snapshot; they remain unwired from the CLI
 
 ## Component boundaries
 
@@ -77,9 +77,9 @@ Design constraints:
 
 `src/lean_weave/executor/` and `src/lean_weave/verify/` read, patch, and check
 one explicit workspace. YAML is data: writes and check argv are copied into an
-immutable approval only when the caller opts in. There is no tool CLI command,
-and these modules do not implement `CodeExecutor.run` or
-`VerificationRunner.run`.
+immutable approval only when the caller opts in. There is no tool CLI command.
+`workflow/` binds these functions under fixed names; it does not widen the
+approval snapshot.
 
 ```text
 approve_tools (explicit root, optional write scope, optional check registry)
@@ -98,6 +98,59 @@ code need an injected offline backend; none is bundled here.
 
 Details, request shapes, and limits: [Standalone code tools](code-tools.md).
 
+## Workflow orchestrator and durable state
+
+`src/lean_weave/workflow/` implements the minimal deterministic state machine.
+There is no graph framework runtime dependency.
+
+```text
+MinimalWorkflowOrchestrator
+  run_feature  ── ContextProvider.build("plan") → validated FeaturePlan
+  run_simple   ── caller-supplied single-task spec (no planning call)
+  resume       ── checkpoint + fresh approvals, never prior messages
+  result       ── read-only WorkflowResult projection
+```
+
+Stage flow: `PLAN → IMPLEMENT (one ready task) → VERIFY → DONE | RETRY → IMPLEMENT | FAILED`.
+Retries are cumulative and bounded. Successful unrelated tasks are not rerun.
+Budget exhaustion is projected as `budget_exhausted` while the public
+`FeatureState.stage` remains `failed`.
+
+Durable state lives under `.lean-weave/workflow/`. Each feature has one atomic,
+version-checked checkpoint containing the schema v1.0.0 `FeatureState` plus a
+private control envelope (task/plan spend, pending effect marker, terminal
+reason). A single-writer lease rejects concurrent writers, symlinks, torn files,
+oversized records, duplicate starts, and workspace mismatches. Schema v1.0.0
+payloads without an envelope still decode.
+
+Entry points:
+
+- `create_orchestrator(AppContext, approval=..., check_ids=..., backend=...)` in
+  `app.py` is the lazy wiring seam. It reuses injected dependencies and provider
+  factories; construction performs no network call, repository scan, or ledger
+  write.
+- `MinimalWorkflowOrchestrator.run_feature(...)` is the string-in/state-out
+  protocol path.
+- `run_simple(feature_id, request, task_spec)` is the typed bypass; invalid
+  input fails before any planning call or write.
+- `result(feature_id)` returns `success`, `failed`, `budget_exhausted`, or
+  `interrupted` with a reason code, task status, verification summary, and
+  cumulative counters.
+
+Authority and limits:
+
+- Caller approval supplies authority. Plan text, YAML, tool responses, and
+  repository content never widen it.
+- Patches are limited to the active task's approved files and the current
+  byte revision. A committed patch whose durability is unconfirmed stops the
+  batch, preserves the effect marker, and interrupts without replay.
+- Checks that execute workspace code require an injected offline
+  `IsolationBackend`; without it the workflow refuses before editing. There is
+  no direct-execution fallback.
+- Limits cover plan calls/tokens, per-task calls/tokens, tool rounds and batch
+  size, retries, and the feature token budget. A reservation is booked before
+  dispatch and settled from verified usage, or retained conservatively.
+
 ## Orchestrator decision
 
 | Option | MVP 1 |
@@ -112,9 +165,9 @@ Methodology from `aif-plan` / `aif-implement` / `aif-verify` is reused as **arti
 ## Package layout (target)
 
 ```text
-src/lean_weave/   # cli, config, context, executor, verify, providers, metrics, contracts, schemas, app
+src/lean_weave/   # cli, config, context, executor, verify, workflow, providers, metrics, contracts, schemas, app
 spikes/           # bounded probes — not production CLI
-tests/            # config / contracts / providers / metrics / cli / context / executor / verify
+tests/            # config / contracts / providers / metrics / cli / context / executor / verify / workflow
 .lean-weave/      # runtime FeatureState and metrics ledger (gitignored)
 .ai-factory/      # DESCRIPTION, ARCHITECTURE, plans, ADRs, references
 docs/             # human docs
