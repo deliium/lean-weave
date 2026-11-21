@@ -13,6 +13,7 @@
 - [x] **CodeExecutor + VerificationRunner** — Subprocess cwd jail; deterministic compile/test/schema gates (no LLM verify in MVP)
 - [x] **Thin CLI** — Feature start/resume/status commands wired to orchestrator; keep `lean_weave:main` canonical
 - [x] **End-to-end MVP feature loop** — Offline CLI/worktree acceptance and token baseline corpus (live DeepSeek capture optional; see `docs/mvp1-readiness.md`)
+- [x] **V2 - Context Intelligence** — Persistent incremental code index and compact repository maps (`wl index` / `wl map`); optional indexed context preview; no embeddings or LangGraph
 - [ ] **Hardening** — Prompt-injection allowlists, executor path canonicalization, git-present isolation when `.git` exists
 - [ ] **Optional LangGraph revisit** — Only if HITL/branching complexity justifies ADR-002 revisit
 
@@ -29,3 +30,4 @@
 | Minimal WorkflowOrchestrator | 2026-11-20 |
 | Thin CLI | 2026-11-20 |
 | End-to-end MVP feature loop | 2026-11-21 |
+| V2 - Context Intelligence | 2026-11-21 |

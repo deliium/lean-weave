@@ -11,6 +11,7 @@ from openai import OpenAI
 from lean_weave.code_index import CodeIndex
 from lean_weave.config import AppConfig, load_config
 from lean_weave.context.provider import DeterministicContextProvider
+from lean_weave.context.repository import Repository
 from lean_weave.contracts import (
     CodeExecutor, ContextProvider, LLMProvider, MetricsCollector,
     StateStore, VerificationRunner, WorkflowOrchestrator,
@@ -21,6 +22,7 @@ from lean_weave.logging_setup import get_logger
 from lean_weave.metrics.jsonl import JsonlMetricsCollector
 from lean_weave.metrics.models import AttemptJournal
 from lean_weave.providers.deepseek import DeepSeekProvider
+from lean_weave.repository_map import MapLimits, RepositoryMap
 from lean_weave.verify.process import IsolationBackend
 from lean_weave.verify.runner import ApprovedChecksRunner
 from lean_weave.workflow.instructions import load_instructions
@@ -115,6 +117,55 @@ def create_code_index(
         protected_paths=_protected_index_paths(context, resolved_root),
         cache_base=cache_base,
     )
+
+
+def create_repository_map(
+    context: AppContext,
+    *,
+    workspace_root: Path | None = None,
+    cache_base: Path | None = None,
+) -> RepositoryMap:
+    """Construct the lazy repository-map seam; no scan or database open."""
+
+    index = create_code_index(
+        context, workspace_root=workspace_root, cache_base=cache_base
+    )
+    limits = MapLimits(
+        tokens_max=context.config.context.map_tokens_max,
+        rows_max=context.config.context.map_rows_max,
+    )
+    log.debug(
+        "[AppContext.repository_map] selection=lazy tokens_max=%s rows_max=%s",
+        limits.tokens_max,
+        limits.rows_max,
+    )
+    return RepositoryMap(index, limits=limits)
+
+
+def create_indexed_map_preview_pair(
+    context: AppContext,
+    *,
+    workspace_root: Path | None = None,
+    cache_base: Path | None = None,
+) -> tuple[Repository, RepositoryMap]:
+    """Build a matching Repository + RepositoryMap pair for opt-in context preview."""
+
+    root = Path.cwd() if workspace_root is None else Path(workspace_root)
+    try:
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        resolved_root = root
+    protected = _protected_index_paths(context, resolved_root)
+    repository = Repository(
+        root,
+        context.config.context,
+        state_dir=context.config.workflow.state_dir,
+        protected_paths=protected,
+    )
+    repository_map = create_repository_map(
+        context, workspace_root=root, cache_base=cache_base
+    )
+    return repository, repository_map
 
 
 def create_context_provider(

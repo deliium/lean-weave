@@ -3,6 +3,7 @@
 from lean_weave.code_index.index import CodeIndex
 from lean_weave.code_index.models import (
     Freshness,
+    IndexGeneration,
     IndexStatus,
     IndexUpdate,
     IndexedSymbol,
@@ -13,6 +14,7 @@ from lean_weave.code_index.models import (
 __all__ = [
     "CodeIndex",
     "Freshness",
+    "IndexGeneration",
     "IndexStatus",
     "IndexUpdate",
     "IndexedSymbol",

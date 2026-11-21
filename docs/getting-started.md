@@ -59,6 +59,7 @@ without it, context builds use the normal AST parser.
 ```bash
 uv run wl index build
 uv run wl index status
+uv run wl map show
 # after editing or switching branches:
 uv run wl index update
 # recovery when status reports corrupt/incompatible/recovery_required:
@@ -69,7 +70,8 @@ uv run wl index build
 The cache lives under `${XDG_CACHE_HOME:-~/.cache}/lean-weave/code-index/` and
 is isolated per checkout. It makes no LLM calls and is never written into the
 repository. See [Code index](code-index.md) for freshness, stable identifiers,
-limits, platform behavior, and recovery.
+limits, platform behavior, and recovery. After a current index exists, see
+[Repository map](repository-map.md) for compact offline map queries.
 
 ## Feature workflow (worktree + CLI)
 

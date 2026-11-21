@@ -8,7 +8,7 @@ over-budget full file falls back to lower detail, and the omission is recorded.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 from lean_weave.config.models import ContextConfig
 from lean_weave.context.git_metadata import GitMetadata, read_git_metadata
@@ -36,6 +36,9 @@ from lean_weave.context.repository_map import build_repository_map
 from lean_weave.errors import ContextBudgetError, InvalidContextRequest
 from lean_weave.logging_setup import get_logger
 from lean_weave.metrics.budget import estimate_tokens
+
+if TYPE_CHECKING:
+    from lean_weave.repository_map import RepositoryMap
 
 log = get_logger("context.builder")
 
@@ -93,6 +96,7 @@ class ContextBuilder:
         state: _State,
         *,
         include_optional: bool = True,
+        wrap_map_untrusted: bool = False,
     ) -> list[dict[str, str]]:
         system = render_system(query.constraints)
         user = render_user(
@@ -104,6 +108,7 @@ class ContextBuilder:
             excerpts=state.excerpts if include_optional else [],
             digests=self._digest_entries(state) if include_optional else [],
             digests_text=state.digests_text,
+            wrap_map_untrusted=wrap_map_untrusted,
         )
         return render_messages(system, user)
 
@@ -363,7 +368,12 @@ class ContextBuilder:
         query: ContextQuery,
         *,
         metadata_digests: Sequence[tuple[str, str]] = (),
+        indexed_map: RepositoryMap | None = None,
     ) -> BuildResult:
+        if indexed_map is not None:
+            return self._build_indexed_map_preview(
+                query, indexed_map=indexed_map, metadata_digests=metadata_digests
+            )
         index = self.index if self.index is not None else build_python_index(self.repository)
         metadata = self.metadata
         if query.allow_git and metadata is None and query.stage is None:
@@ -576,6 +586,111 @@ class ContextBuilder:
             user_prompt=user,
             file_excerpts=file_excerpts,
             digests=digest_map,
+        )
+
+    def _build_indexed_map_preview(
+        self,
+        query: ContextQuery,
+        *,
+        indexed_map: RepositoryMap,
+        metadata_digests: Sequence[tuple[str, str]],
+    ) -> BuildResult:
+        """Opt-in map-only preview; no AST index, Git, or source ranking."""
+
+        if query.stage is not None:
+            raise InvalidContextRequest("Indexed map preview cannot run under a workflow stage")
+        if query.level != ExpansionLevel.MAP:
+            raise InvalidContextRequest("Indexed map preview requires expansion level map")
+        if query.line_range is not None:
+            raise InvalidContextRequest("Indexed map preview does not accept line ranges")
+        if query.symbols or query.exact_symbols_only:
+            raise InvalidContextRequest("Indexed map preview does not accept symbol selectors")
+
+        state = _State(omissions=[], digests_text=[])
+        for label, text in metadata_digests:
+            bounded = (
+                text
+                if len(text) <= self.config.digest_chars_max
+                else text[: self.config.digest_chars_max] + "\n[digest truncated]"
+            )
+            state.digests_text.append(f"- {label}: {bounded}")
+        required_messages = self._messages(query, state, include_optional=False)
+        required_tokens = estimate_tokens(required_messages)
+        if required_tokens > self.config.stage_prompt_tokens_max:
+            raise ContextBudgetError("Required context envelope exceeds the stage prompt budget")
+
+        scope_paths = set(query.scope_paths)
+        path_filter = set(query.paths)
+        if scope_paths and path_filter:
+            allowed = frozenset(scope_paths & path_filter)
+        elif scope_paths:
+            allowed = frozenset(scope_paths)
+        elif path_filter:
+            allowed = frozenset(path_filter)
+        else:
+            allowed = None
+
+        map_result = indexed_map.for_context(
+            allowed_paths=allowed,
+            repository=self.repository,
+        )
+        admitted: list[str] = []
+        admitted_paths: list[str] = []
+        dropped = 0
+        for row, path in zip(map_result.rows, map_result.row_paths, strict=True):
+            trial = _State(
+                map_lines=[*admitted, row],
+                digests_text=list(state.digests_text),
+                omissions=list(state.omissions),
+            )
+            trial_messages = self._messages(query, trial, wrap_map_untrusted=True)
+            if estimate_tokens(trial_messages) > self.config.stage_prompt_tokens_max:
+                dropped += 1
+                continue
+            admitted.append(row)
+            admitted_paths.append(path)
+        if dropped or map_result.truncated:
+            state.omissions.append(
+                Omission(reason=OmissionReason.MAP_LIMIT, detail="indexed_map")
+            )
+        state.map_lines = admitted
+        messages = self._messages(query, state, wrap_map_untrusted=True)
+        estimated = estimate_tokens(messages)
+        # Preserve path order of first occurrence for relevant_paths.
+        relevant: list[str] = []
+        seen: set[str] = set()
+        for path in admitted_paths:
+            if path not in seen:
+                seen.add(path)
+                relevant.append(path)
+        pack = ContextPack(
+            task=query.task,
+            level=query.level,
+            stage=query.stage,
+            constraints=list(query.constraints),
+            relevant_paths=relevant,
+            symbols=[],
+            excerpts=[],
+            repository_map=list(admitted),
+            digests=[],
+            omissions=state.omissions,
+            estimated_tokens=estimated,
+            required_tokens=required_tokens,
+        )
+        log.debug(
+            "[Context.indexed_map] outcome=ok rows=%s dropped=%s tokens=%s required=%s",
+            len(admitted),
+            dropped,
+            estimated,
+            required_tokens,
+        )
+        return BuildResult(
+            pack=pack,
+            messages=messages,
+            system_prompt=render_system(query.constraints),
+            user_prompt=messages[1]["content"],
+            file_excerpts={},
+            digests={},
         )
 
 

@@ -102,6 +102,30 @@ class CodeIndexError(LeanWeaveError):
         super().__init__(code)
 
 
+_REPOSITORY_MAP_CODES = frozenset(
+    {
+        "invalid_selector",
+        "not_found",
+        "ambiguous_selector",
+    }
+)
+
+_REPOSITORY_MAP_MESSAGES = {
+    "invalid_selector": "Repository map selector is invalid",
+    "not_found": "Repository map selector was not found",
+    "ambiguous_selector": "Repository map selector is ambiguous",
+}
+
+
+class RepositoryMapError(LeanWeaveError):
+    """Safe repository-map selector failure. Messages are fixed, never echo input."""
+
+    def __init__(self, code: str) -> None:
+        if code not in _REPOSITORY_MAP_CODES:
+            code = "invalid_selector"
+        self.code = code
+        super().__init__(_REPOSITORY_MAP_MESSAGES[code])
+
 
 class StateError(LeanWeaveError):
     """Durable workflow state is unreadable, conflicting, or unwritable."""

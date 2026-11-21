@@ -16,6 +16,7 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Stage-scoped context** with hard bans on secrets, full skill trees, and cross-stage transcripts
 - **Deterministic context retrieval** — bounded repository inventory, AST symbols/imports, literal search with an `rg`/Python fallback, lexicographic ranking, and prompt budgets; no embeddings or LLM calls
 - **Disposable code index** — an optional SQLite cache of admitted Python facts outside the checkout; read-only reuse only, never a prompt authority, never written by the workflow
+- **Repository map** — in-memory static dependency graph and budgeted views over a checked index generation; explicit `wl map` / `--indexed-map` only
 - **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata through an explicit caller approval snapshot
 - **Worktree session** — public CLI provisions or adopts a linked worktree, freezes approvals, and drives the existing orchestrator without a second engine
 
@@ -45,16 +46,25 @@ path-independent Python facts. It is populated only by explicit
 implement/retry context builds after V1 admission. It cannot change file
 membership, ranking, graph edges, prompt shape, or verification authority.
 
+`src/lean_weave/repository_map/` derives an in-memory dependency graph from a
+checked index generation. Ranking uses direct import evidence (no PageRank
+dependency). Default ContextProvider builds are unchanged; only explicit
+`wl map` and `wl context build --indexed-map` consume map rows.
+
 ```text
 Repository (inventory + safe admissions)
   → policy (ignore rules, hard bans, credential filter)
   → python_index (AST symbols + in-repo import edges)
-  → repository_map (compact structural map)
+  → repository_map (legacy compact structural map for default packs)
   → search (rg stdin / Python fallback) + git_metadata (preview recency)
   → ranking (exact symbol → explicit path → terms → one-hop → path → recency)
   → builder (progressive admission, dedup, provenance, budgets)
   → render (one system + one user message)
   → provider (stage adapter)
+
+CodeIndex (checked generation)
+  → repository_map.RepositoryMap (static graph + budgeted views)
+  → wl map / optional indexed ContextPack preview
 ```
 
 Design constraints:

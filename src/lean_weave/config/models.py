@@ -85,6 +85,8 @@ class ContextConfig(ConfigModel):
     visited_entries_max: int = Field(default=20000, gt=0)
     search_hits_max: int = Field(default=100, gt=0)
     recent_commits_max: int = Field(default=10, gt=0, le=1000)
+    map_tokens_max: int = Field(default=1024, ge=1, le=8192)
+    map_rows_max: int = Field(default=80, ge=1, le=500)
     exclusions: list[str] = Field(default_factory=list)
 
     @field_validator("exclusions")

@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 from pydantic import ValidationError
 
+from lean_weave.app import create_indexed_map_preview_pair
 from lean_weave.cli.runtime import command_context
 from lean_weave.context.builder import ContextBuilder
 from lean_weave.context.models import (
@@ -175,14 +176,18 @@ def build_command(
     path: list[str] = typer.Option([], "--path", help="Explicit eligible path (repeatable)."),
     level: ExpansionLevel = typer.Option(ExpansionLevel.SYMBOLS, "--level"),
     reason: str | None = typer.Option(None, "--reason", help="Justification for full files."),
+    indexed_map: bool = typer.Option(
+        False, "--indexed-map", help="Opt-in compact map from the persistent code index."
+    ),
     json_output: bool = typer.Option(False, "--json", help="Stable JSON output."),
 ) -> None:
     """Build a deterministic context pack under configured budgets."""
 
     context = command_context(ctx)
-    repository = _repository(context)
     paths = [_path(item) for item in path]
     _guard(task, what="Task text")
+    if indexed_map and level != ExpansionLevel.MAP:
+        raise typer.BadParameter("--indexed-map requires --level map")
     if level == ExpansionLevel.FULL and (len(paths) != 1 or not reason or not reason.strip()):
         raise typer.BadParameter("--level full requires exactly one --path and a non-empty --reason")
     try:
@@ -191,14 +196,20 @@ def build_command(
             level=level,
             paths=paths,
             reason=reason,
-            allow_git=True,
+            allow_git=not indexed_map,
         )
     except ValidationError:
         raise typer.BadParameter("Invalid context selectors") from None
-    for item in query.paths:
-        if not repository.is_eligible(item):
-            raise ForbiddenContext("Requested path is not available for context retrieval")
-    result = ContextBuilder(repository).build(query)
+
+    if indexed_map:
+        repository, repository_map = create_indexed_map_preview_pair(context)
+        result = ContextBuilder(repository).build(query, indexed_map=repository_map)
+    else:
+        repository = _repository(context)
+        for item in query.paths:
+            if not repository.is_eligible(item):
+                raise ForbiddenContext("Requested path is not available for context retrieval")
+        result = ContextBuilder(repository).build(query)
     pack = result.pack
     payload = {
         "command": "build",
@@ -217,6 +228,8 @@ def build_command(
         f"files={len(pack.relevant_paths)} excerpts={len(pack.excerpts)} omissions={len(pack.omissions)}"
     )
     body = [header]
+    if indexed_map and pack.repository_map:
+        body.extend(pack.repository_map)
     for excerpt in pack.excerpts:
         body.append(
             f"--- {excerpt.path}:{excerpt.start_line}-{excerpt.end_line} "

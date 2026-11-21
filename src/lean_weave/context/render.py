@@ -31,9 +31,16 @@ def render_system(constraints: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
-def _render_map(map_lines: Sequence[str]) -> list[str]:
+def _render_map(map_lines: Sequence[str], *, wrap_untrusted: bool = False) -> list[str]:
     if not map_lines:
         return []
+    if wrap_untrusted:
+        return [
+            "REPOSITORY MAP (compact):",
+            UNTRUSTED_START,
+            *map_lines,
+            UNTRUSTED_END,
+        ]
     return ["REPOSITORY MAP (compact):", *map_lines]
 
 
@@ -90,13 +97,14 @@ def render_user(
     excerpts: Sequence[CodeExcerpt],
     digests: Sequence[DigestEntry],
     digests_text: Sequence[str] = (),
+    wrap_map_untrusted: bool = False,
 ) -> str:
     sections: list[list[str]] = [
         ["TASK:", task],
     ]
     if stage:
         sections.append([f"STAGE: {stage}", f"EXPANSION LEVEL: {level}"])
-    sections.append(_render_map(map_lines))
+    sections.append(_render_map(map_lines, wrap_untrusted=wrap_map_untrusted))
     sections.append(_render_symbols(symbols))
     sections.append(_render_excerpts(excerpts))
     if digests_text:

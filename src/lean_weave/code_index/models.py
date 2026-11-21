@@ -99,6 +99,14 @@ class IndexHeader:
 
 
 @dataclass(frozen=True)
+class IndexGeneration:
+    """One checked, immutable admitted source generation (no source bodies)."""
+
+    header: IndexHeader
+    records: tuple[FileRecord, ...]
+
+
+@dataclass(frozen=True)
 class FileRecord:
     path: str
     file_id: str

@@ -21,6 +21,7 @@ from lean_weave.code_index.models import (
     MODULE_KIND,
     FileRecord,
     Freshness,
+    IndexGeneration,
     IndexStatus,
     IndexUpdate,
     IndexedSymbol,
@@ -470,6 +471,57 @@ class CodeIndex:
             return Freshness.UNKNOWN
 
     # ------------------------------------------------------------------
+    # Checked generation (shared by lookup and whole-corpus reads)
+    # ------------------------------------------------------------------
+    @contextlib.contextmanager
+    def _checked_generation(self) -> Iterator[IndexGeneration]:
+        """Yield one healthy, live-verified generation; revalidate on normal exit."""
+
+        location = self._location()
+        repository = self._repository()
+        with _read_lease(location):
+            store = SqliteIndexStore(location)
+            health, header, records = store.inspect()
+            if health is not StoreHealth.HEALTHY or header is None:
+                raise CodeIndexError(
+                    "missing" if health is StoreHealth.MISSING else health.value
+                )
+            with repository.scan_python_sources() as scan:
+                if not scan.complete:
+                    raise CodeIndexError("incomplete")
+                policy = self._policy_key()
+                revision = source_revision(
+                    policy, {item.path: item.digest for item in scan.snapshots}
+                )
+                if (
+                    header.policy_key != policy
+                    or header.extractor_key != extractor_key()
+                    or revision != header.revision
+                ):
+                    raise CodeIndexError("stale")
+                generation = IndexGeneration(header=header, records=records)
+                log.debug(
+                    "[CodeIndex._checked_generation] yield files=%s revision=%s",
+                    len(records),
+                    header.revision,
+                )
+                yield generation
+                if not scan.revalidate():
+                    raise CodeIndexError("storage_unavailable")
+
+    def read_generation(self) -> IndexGeneration:
+        """Return one checked immutable generation without AST work or rebuild."""
+
+        with self._checked_generation() as generation:
+            result = generation
+        log.debug(
+            "[CodeIndex.read_generation] outcome=ok files=%s revision=%s",
+            len(result.records),
+            result.header.revision,
+        )
+        return result
+
+    # ------------------------------------------------------------------
     # Lookup
     # ------------------------------------------------------------------
     def lookup(
@@ -492,37 +544,17 @@ class CodeIndex:
             raise InvalidContextRequest("Index lookup limit must be a positive integer")
         else:
             bound = min(limit, maximum)
-        location = self._location()
-        repository = self._repository()
-        with _read_lease(location):
-            store = SqliteIndexStore(location)
-            health, header, records = store.inspect()
-            if health is not StoreHealth.HEALTHY or header is None:
-                raise CodeIndexError("missing" if health is StoreHealth.MISSING else health.value)
-            with repository.scan_python_sources() as scan:
-                if not scan.complete:
-                    raise CodeIndexError("incomplete")
-                policy = self._policy_key()
-                revision = source_revision(
-                    policy, {item.path: item.digest for item in scan.snapshots}
-                )
-                if (
-                    header.policy_key != policy
-                    or header.extractor_key != extractor_key()
-                    or revision != header.revision
-                ):
-                    raise CodeIndexError("stale")
-                hits = self._collect_hits(
-                    records,
-                    header.revision,
-                    selector,
-                    selected_path,
-                    bound,
-                )
-                if not scan.revalidate():
-                    raise CodeIndexError("storage_unavailable")
+        with self._checked_generation() as generation:
+            hits = self._collect_hits(
+                generation.records,
+                generation.header.revision,
+                selector,
+                selected_path,
+                bound,
+            )
+            revision = generation.header.revision
         return SymbolLookup(
-            revision=header.revision,
+            revision=revision,
             hits=tuple(hits[:bound]),
             truncated=len(hits) > bound,
         )

@@ -21,6 +21,7 @@ from lean_weave.cli.commands.feature import (
 from lean_weave.cli.commands.index import index_app
 from lean_weave.cli.commands.init import initialize
 from lean_weave.cli.commands.llm import llm_app
+from lean_weave.cli.commands.map import map_app
 from lean_weave.cli.options import LogFormat
 
 log = get_logger("cli")
@@ -52,6 +53,7 @@ app.command("resume")(resume_command)
 app.add_typer(worktree_app, name="worktree")
 app.add_typer(llm_app, name="llm")
 app.add_typer(index_app, name="index")
+app.add_typer(map_app, name="map")
 
 
 @app.callback()

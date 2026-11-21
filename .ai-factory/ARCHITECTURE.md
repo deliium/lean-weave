@@ -116,12 +116,19 @@ owner-only external cache; `models.py` owns canonical facts serialization,
 source revisions, policy/extractor keys, and stable identifiers;
 `sqlite_store.py` validates the schema, integrity, manifest checksum, scoped
 reads, and transactional writes; `index.py` performs strict admission,
-incremental reconciliation, checked freshness/lookup, scoped provider loads,
-and clear. The cache is disposable, contains no source bodies or Git
-metadata, and is never consulted for membership, ranking, or prompt
-authority. `app.py::create_code_index` is the lazy wiring seam; no cache path,
-directory, or database is opened for help, provider construction, plan, or
-verify.
+incremental reconciliation, checked freshness/lookup, whole-generation reads,
+scoped provider loads, and clear. The cache is disposable, contains no source
+bodies or Git metadata, and is never consulted for membership, ranking, or
+prompt authority. `app.py::create_code_index` is the lazy wiring seam; no cache
+path, directory, or database is opened for help, provider construction, plan,
+or verify.
+
+`repository_map/` is the optional V2 compact map layer. It reads a checked
+`IndexGeneration`, resolves traceable static imports into an in-memory graph,
+ranks by direct import evidence, and renders budgeted views. `app.py::create_repository_map`
+is lazy. Default ContextProvider behavior is unchanged; only explicit `wl map`
+and `wl context build --indexed-map` consume map rows. No LangGraph, graph
+database, or orchestrator dependency.
 
 ## ADRs
 

@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from benchmarks.fixtures import load_manifest, materialize
+from lean_weave.cli import app
 from lean_weave.code_index import CodeIndex
 from lean_weave.config.models import ContextConfig
 from lean_weave.context.models import iter_lines
 from lean_weave.context.provider import DeterministicContextProvider
 from lean_weave.schemas import FeaturePlan, FeatureState, ImplementationTask, Stage
+
+runner = CliRunner()
 
 
 @pytest.fixture
@@ -111,3 +117,115 @@ def test_warm_fixture_prompt_matches_cold(fixture_repo: Path, cache: Path):
     assert warm_bundle["file_excerpts"].keys() == cold_bundle["file_excerpts"].keys()
     assert warm_bundle["pack"].relevant_paths == cold_bundle["pack"].relevant_paths
     assert warm_bundle["pack"].estimated_tokens == cold_bundle["pack"].estimated_tokens
+
+
+def test_bug_fix_map_ranges_survive_explicit_update(
+    fixture_repo: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(fixture_repo)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    assert runner.invoke(app, ["index", "build"]).exit_code == 0
+
+    first = runner.invoke(app, ["map", "show"])
+    second = runner.invoke(app, ["map", "show"])
+    assert first.exit_code == 0 and second.exit_code == 0
+    assert first.stdout == second.stdout
+    assert "calc.add" in first.stdout
+
+    module = runner.invoke(app, ["map", "module", "calc"])
+    assert module.exit_code == 0
+    assert "calc ::" in module.stdout
+
+    refs = runner.invoke(app, ["map", "references", "calc.add"])
+    assert refs.exit_code == 0
+    index = CodeIndex(fixture_repo, cache_base=cache)
+    hit = index.lookup("add", path="src/calc.py").hits[0]
+    expected = f"src/calc.py:{hit.start_line}-{hit.end_line}"
+    assert expected in refs.stdout
+    source = (fixture_repo / "src" / "calc.py").read_text(encoding="utf-8")
+    lines = iter_lines(source)
+    assert "def add" in "\n".join(lines[hit.start_line - 1 : hit.end_line])
+
+    (fixture_repo / "src" / "calc.py").write_text("\ndef add(a, b):\n    return a - b\n")
+    stale = runner.invoke(app, ["map", "show"])
+    assert stale.exit_code == 1
+    assert stale.stdout == ""
+    assert "Error: stale" in stale.stderr
+    assert runner.invoke(app, ["index", "update"]).exit_code == 0
+    updated = runner.invoke(app, ["map", "references", "calc.add"])
+    assert updated.exit_code == 0
+    new_hit = index.lookup("add", path="src/calc.py").hits[0]
+    assert new_hit.start_line == hit.start_line + 1
+    assert f"src/calc.py:{new_hit.start_line}-{new_hit.end_line}" in updated.stdout
+
+
+def test_render_symbolref_and_multi_file_src_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    checkout = tmp_path / "render-checkout"
+    models_src = Path("src/lean_weave/context/models.py")
+    render_src = Path("src/lean_weave/context/render.py")
+    dest_models = checkout / models_src
+    dest_render = checkout / render_src
+    dest_models.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(models_src, dest_models)
+    shutil.copy2(render_src, dest_render)
+    config_dir = checkout / ".lean-weave"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        "version: 1\ncontext:\n  map_rows_max: 500\n  map_tokens_max: 8192\n",
+        encoding="utf-8",
+    )
+    cache = tmp_path / "render-cache"
+    cache.mkdir(mode=0o700)
+    monkeypatch.chdir(checkout)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+
+    assert runner.invoke(app, ["index", "build"]).exit_code == 0
+    deps = runner.invoke(app, ["map", "dependencies", "lean_weave.context.models"])
+    assert deps.exit_code == 0, deps.output
+    assert "in " in deps.stdout
+    assert "render.py" in deps.stdout
+    refs = runner.invoke(app, ["map", "references", "lean_weave.context.models.SymbolRef"])
+    assert refs.exit_code == 0, refs.output
+    assert "def " in refs.stdout
+    assert "SymbolRef" in refs.stdout
+    models_text = dest_models.read_text(encoding="utf-8")
+    class_line = next(
+        index
+        for index, line in enumerate(iter_lines(models_text), start=1)
+        if line.startswith("class SymbolRef")
+    )
+    assert f"models.py:{class_line}-" in refs.stdout
+
+    preview = runner.invoke(
+        app,
+        [
+            "context",
+            "build",
+            "preview",
+            "--level",
+            "map",
+            "--indexed-map",
+            "--path",
+            "src/lean_weave/context/models.py",
+            "--json",
+        ],
+    )
+    assert preview.exit_code == 0, preview.output
+    payload = json.loads(preview.stdout)
+    assert payload["relevant_paths"] == ["src/lean_weave/context/models.py"]
+    assert payload["excerpts"] == []
+
+    multi = materialize("multi_file_feature", tmp_path / "multi").root
+    multi_cache = tmp_path / "multi-cache"
+    multi_cache.mkdir(mode=0o700)
+    monkeypatch.chdir(multi)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(multi_cache))
+    assert runner.invoke(app, ["index", "build"]).exit_code == 0
+    module = runner.invoke(app, ["map", "module", "config"])
+    assert module.exit_code == 0
+    deps_app = runner.invoke(app, ["map", "dependencies", "app"])
+    assert deps_app.exit_code == 0
+    assert "src.config" in deps_app.stdout
+    assert "unresolved(not_indexed)" in deps_app.stdout or "not_indexed" in deps_app.stdout

@@ -178,3 +178,7 @@ executor tools are unchanged.
 Warm cached facts produce byte-identical prompts to cold parsing for the same
 admitted source; the offline acceptance test asserts this on the benchmark
 fixtures.
+
+Checked whole-generation reads also feed the offline [Repository map](repository-map.md)
+(`wl map …` and optional `wl context build --indexed-map`). Those surfaces never
+mutate the index and never become workflow prompt authority by default.
