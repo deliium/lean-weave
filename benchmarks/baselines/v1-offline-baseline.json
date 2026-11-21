@@ -1,0 +1,417 @@
+{
+  "capture_errors": [],
+  "captured_at": "2026-11-21T16:31:00.416863+00:00",
+  "commands": [
+    "uv run --locked pytest tests/benchmarks/ tests/cli/test_feature_offline_e2e.py tests/cli/test_feature_recovery_e2e.py tests/cli/test_feature_isolation_e2e.py tests/cli/test_feature_e2e.py",
+    "uv run python -m benchmarks.run  # offline note only; in-process evidence via pytest"
+  ],
+  "dataset": {
+    "budget_exhaustion": "414c44b3dae778f5c03e1426b9928828e850bbaf",
+    "bug_fix": "1802647eabbd5baca3809260f59ecb572b8d5128",
+    "insufficient_context": "ec476a4a5bd2e91d1738d1e4c5974f7ce6fa833e",
+    "multi_file_feature": "4bb4658e513579e5a9eaf514bf39ddf2ad1f38df",
+    "single_file_feature": "0f580b5a130364ef8fe79585acc7d5728f4c89d5",
+    "test_repair": "a1895dd7225578441cfd382761e28c61eea679d8",
+    "verify_then_repair": "e0575201de6297e07ff09292e9d268882c49d883"
+  },
+  "live_gap": "Explicit --live DeepSeek run was not executed in this capture; no fabricated live numbers.",
+  "modes": {
+    "deepseek_live": "not_run",
+    "offline_mock": "pass"
+  },
+  "runner": {
+    "cases": [
+      {
+        "case_id": "bug_fix",
+        "check_executions": null,
+        "check_failures": null,
+        "check_passes": null,
+        "duration_ms": 245,
+        "error": null,
+        "exit_code": 0,
+        "expected_negative": false,
+        "expected_outcome": "success",
+        "feature_id": "41b77bae09b9454d88239be43e2cc030",
+        "metrics_path": "benchmarks/baselines/bug_fix-41b77bae09b9454d88239be43e2cc030.metrics.json",
+        "mode": "offline_mock",
+        "oracle_ok": true,
+        "reason": "verification_passed",
+        "retry_count": 0,
+        "settings": {
+          "base_url": "https://api.deepseek.com",
+          "checks": [
+            {
+              "argv": [
+                "/home/deliium/src/lean-weave/.venv/bin/python",
+                "/home/deliium/src/lean-weave/benchmarks/fixtures/oracles/assert_add.py",
+                "src/calc.py"
+              ],
+              "executable": "/home/deliium/src/lean-weave/.venv/bin/python",
+              "id": "assert_add",
+              "output_bytes_max": 65536,
+              "runs_workspace_code": false,
+              "timeout_s": 5.0
+            }
+          ],
+          "config_fingerprint": "sha256:bb4d55cfd7ab365e49f890f85fb2d76723436f91d1411b079ba83cba9a49f262",
+          "gateway_max_retries": 0,
+          "max_output_tokens": 256,
+          "model": "deepseek-flash",
+          "thinking": false,
+          "workflow": {
+            "feature_token_budget": 20000,
+            "max_plan_calls": 1,
+            "max_plan_tokens": 4000,
+            "max_retries": 2,
+            "max_task_llm_calls": 6,
+            "max_task_tokens": 5000,
+            "max_tool_calls_per_batch": 4,
+            "max_tool_rounds": 4,
+            "state_dir": ".lean-weave"
+          },
+          "write_allow": [
+            "src/calc.py"
+          ]
+        },
+        "status": "success",
+        "verification_status": "pass"
+      },
+      {
+        "case_id": "single_file_feature",
+        "check_executions": null,
+        "check_failures": null,
+        "check_passes": null,
+        "duration_ms": 225,
+        "error": null,
+        "exit_code": 0,
+        "expected_negative": false,
+        "expected_outcome": "success",
+        "feature_id": "1ee4571825ce4918bd4c4da35f0b2bcd",
+        "metrics_path": "benchmarks/baselines/single_file_feature-1ee4571825ce4918bd4c4da35f0b2bcd.metrics.json",
+        "mode": "offline_mock",
+        "oracle_ok": true,
+        "reason": "verification_passed",
+        "retry_count": 0,
+        "settings": {
+          "base_url": "https://api.deepseek.com",
+          "checks": [
+            {
+              "argv": [
+                "/home/deliium/src/lean-weave/.venv/bin/python",
+                "/home/deliium/src/lean-weave/benchmarks/fixtures/oracles/assert_greeter.py",
+                "src/greeter.py"
+              ],
+              "executable": "/home/deliium/src/lean-weave/.venv/bin/python",
+              "id": "assert_greeter",
+              "output_bytes_max": 65536,
+              "runs_workspace_code": false,
+              "timeout_s": 5.0
+            }
+          ],
+          "config_fingerprint": "sha256:807aae43d186dafe618ab3f06925bf01146b28d090abab43b74edaab428258ef",
+          "gateway_max_retries": 0,
+          "max_output_tokens": 256,
+          "model": "deepseek-flash",
+          "thinking": false,
+          "workflow": {
+            "feature_token_budget": 20000,
+            "max_plan_calls": 1,
+            "max_plan_tokens": 4000,
+            "max_retries": 2,
+            "max_task_llm_calls": 6,
+            "max_task_tokens": 5000,
+            "max_tool_calls_per_batch": 4,
+            "max_tool_rounds": 4,
+            "state_dir": ".lean-weave"
+          },
+          "write_allow": [
+            "src/greeter.py"
+          ]
+        },
+        "status": "success",
+        "verification_status": "pass"
+      },
+      {
+        "case_id": "multi_file_feature",
+        "check_executions": null,
+        "check_failures": null,
+        "check_passes": null,
+        "duration_ms": 208,
+        "error": null,
+        "exit_code": 0,
+        "expected_negative": false,
+        "expected_outcome": "success",
+        "feature_id": "f402c85d08f64684af582062d6745e5f",
+        "metrics_path": "benchmarks/baselines/multi_file_feature-f402c85d08f64684af582062d6745e5f.metrics.json",
+        "mode": "offline_mock",
+        "oracle_ok": true,
+        "reason": "verification_passed",
+        "retry_count": 0,
+        "settings": {
+          "base_url": "https://api.deepseek.com",
+          "checks": [
+            {
+              "argv": [
+                "/home/deliium/src/lean-weave/.venv/bin/python",
+                "/home/deliium/src/lean-weave/benchmarks/fixtures/oracles/assert_multi_file.py",
+                "."
+              ],
+              "executable": "/home/deliium/src/lean-weave/.venv/bin/python",
+              "id": "assert_multi_file",
+              "output_bytes_max": 65536,
+              "runs_workspace_code": false,
+              "timeout_s": 5.0
+            }
+          ],
+          "config_fingerprint": "sha256:45fa19d6519c0d0e719502ac90fb0f1b1a7be1fdfa2cdc1f064f6ee85658855c",
+          "gateway_max_retries": 0,
+          "max_output_tokens": 256,
+          "model": "deepseek-flash",
+          "thinking": false,
+          "workflow": {
+            "feature_token_budget": 20000,
+            "max_plan_calls": 1,
+            "max_plan_tokens": 4000,
+            "max_retries": 2,
+            "max_task_llm_calls": 6,
+            "max_task_tokens": 5000,
+            "max_tool_calls_per_batch": 4,
+            "max_tool_rounds": 4,
+            "state_dir": ".lean-weave"
+          },
+          "write_allow": [
+            "src/app.py",
+            "src/config.py"
+          ]
+        },
+        "status": "success",
+        "verification_status": "pass"
+      },
+      {
+        "case_id": "test_repair",
+        "check_executions": null,
+        "check_failures": null,
+        "check_passes": null,
+        "duration_ms": 245,
+        "error": null,
+        "exit_code": 0,
+        "expected_negative": false,
+        "expected_outcome": "success",
+        "feature_id": "e42baa9b663d41c49690cd2f36f6f695",
+        "metrics_path": "benchmarks/baselines/test_repair-e42baa9b663d41c49690cd2f36f6f695.metrics.json",
+        "mode": "offline_mock",
+        "oracle_ok": true,
+        "reason": "verification_passed",
+        "retry_count": 0,
+        "settings": {
+          "base_url": "https://api.deepseek.com",
+          "checks": [
+            {
+              "argv": [
+                "/home/deliium/src/lean-weave/.venv/bin/python",
+                "/home/deliium/src/lean-weave/benchmarks/fixtures/oracles/assert_test_repair.py",
+                "tests/test_mathops.py"
+              ],
+              "executable": "/home/deliium/src/lean-weave/.venv/bin/python",
+              "id": "assert_test_repair",
+              "output_bytes_max": 65536,
+              "runs_workspace_code": false,
+              "timeout_s": 5.0
+            }
+          ],
+          "config_fingerprint": "sha256:588dc0683180518bb67692f42b418f21651e9be19e9f20230307315af8ca06e0",
+          "gateway_max_retries": 0,
+          "max_output_tokens": 256,
+          "model": "deepseek-flash",
+          "thinking": false,
+          "workflow": {
+            "feature_token_budget": 20000,
+            "max_plan_calls": 1,
+            "max_plan_tokens": 4000,
+            "max_retries": 2,
+            "max_task_llm_calls": 6,
+            "max_task_tokens": 5000,
+            "max_tool_calls_per_batch": 4,
+            "max_tool_rounds": 4,
+            "state_dir": ".lean-weave"
+          },
+          "write_allow": [
+            "tests/test_mathops.py"
+          ]
+        },
+        "status": "success",
+        "verification_status": "pass"
+      },
+      {
+        "case_id": "verify_then_repair",
+        "check_executions": null,
+        "check_failures": null,
+        "check_passes": null,
+        "duration_ms": 227,
+        "error": null,
+        "exit_code": 0,
+        "expected_negative": false,
+        "expected_outcome": "success_after_repair",
+        "feature_id": "495c7243c2ff4004ae417b34a7de30fd",
+        "metrics_path": "benchmarks/baselines/verify_then_repair-495c7243c2ff4004ae417b34a7de30fd.metrics.json",
+        "mode": "offline_mock",
+        "oracle_ok": true,
+        "reason": "verification_passed",
+        "retry_count": 0,
+        "settings": {
+          "base_url": "https://api.deepseek.com",
+          "checks": [
+            {
+              "argv": [
+                "/home/deliium/src/lean-weave/.venv/bin/python",
+                "/home/deliium/src/lean-weave/benchmarks/fixtures/oracles/assert_marker.py",
+                "src/marker.py"
+              ],
+              "executable": "/home/deliium/src/lean-weave/.venv/bin/python",
+              "id": "assert_marker",
+              "output_bytes_max": 65536,
+              "runs_workspace_code": false,
+              "timeout_s": 5.0
+            }
+          ],
+          "config_fingerprint": "sha256:319bf2fb7703f6090cc169b510fabecc8fef51f24978d7371d006f7127f14074",
+          "gateway_max_retries": 0,
+          "max_output_tokens": 256,
+          "model": "deepseek-flash",
+          "thinking": false,
+          "workflow": {
+            "feature_token_budget": 20000,
+            "max_plan_calls": 1,
+            "max_plan_tokens": 4000,
+            "max_retries": 2,
+            "max_task_llm_calls": 6,
+            "max_task_tokens": 5000,
+            "max_tool_calls_per_batch": 4,
+            "max_tool_rounds": 4,
+            "state_dir": ".lean-weave"
+          },
+          "write_allow": [
+            "src/marker.py"
+          ]
+        },
+        "status": "success",
+        "verification_status": "pass"
+      },
+      {
+        "case_id": "insufficient_context",
+        "check_executions": null,
+        "check_failures": null,
+        "check_passes": null,
+        "duration_ms": 162,
+        "error": null,
+        "exit_code": 0,
+        "expected_negative": true,
+        "expected_outcome": "failed",
+        "feature_id": "60fd45bde8da483bbe11b14d29dbd5ea",
+        "metrics_path": "benchmarks/baselines/insufficient_context-60fd45bde8da483bbe11b14d29dbd5ea.metrics.json",
+        "mode": "offline_mock",
+        "oracle_ok": null,
+        "reason": "invalid_plan",
+        "retry_count": 0,
+        "settings": {
+          "base_url": "https://api.deepseek.com",
+          "checks": [
+            {
+              "argv": [
+                "/home/deliium/src/lean-weave/.venv/bin/python",
+                "/home/deliium/src/lean-weave/benchmarks/fixtures/oracles/assert_visible_flag.py",
+                "src/visible.py"
+              ],
+              "executable": "/home/deliium/src/lean-weave/.venv/bin/python",
+              "id": "assert_visible_flag",
+              "output_bytes_max": 65536,
+              "runs_workspace_code": false,
+              "timeout_s": 5.0
+            }
+          ],
+          "config_fingerprint": "sha256:d3048e7a2f5ffec70df15742e367026de28b7e23915fed7f5e4cec027bba50eb",
+          "gateway_max_retries": 0,
+          "max_output_tokens": 256,
+          "model": "deepseek-flash",
+          "thinking": false,
+          "workflow": {
+            "feature_token_budget": 20000,
+            "max_plan_calls": 1,
+            "max_plan_tokens": 4000,
+            "max_retries": 2,
+            "max_task_llm_calls": 6,
+            "max_task_tokens": 5000,
+            "max_tool_calls_per_batch": 4,
+            "max_tool_rounds": 4,
+            "state_dir": ".lean-weave"
+          },
+          "write_allow": [
+            "src/visible.py"
+          ]
+        },
+        "status": "failed",
+        "verification_status": null
+      },
+      {
+        "case_id": "budget_exhaustion",
+        "check_executions": null,
+        "check_failures": null,
+        "check_passes": null,
+        "duration_ms": 163,
+        "error": null,
+        "exit_code": 0,
+        "expected_negative": true,
+        "expected_outcome": "budget_exhausted",
+        "feature_id": "f582ea0a684f4c059ff056244d898342",
+        "metrics_path": "benchmarks/baselines/budget_exhaustion-f582ea0a684f4c059ff056244d898342.metrics.json",
+        "mode": "offline_mock",
+        "oracle_ok": null,
+        "reason": "feature_token_limit",
+        "retry_count": 0,
+        "settings": {
+          "base_url": "https://api.deepseek.com",
+          "checks": [
+            {
+              "argv": [
+                "/home/deliium/src/lean-weave/.venv/bin/python",
+                "/home/deliium/src/lean-weave/benchmarks/fixtures/oracles/assert_mark.py",
+                "src/small.py"
+              ],
+              "executable": "/home/deliium/src/lean-weave/.venv/bin/python",
+              "id": "assert_mark",
+              "output_bytes_max": 65536,
+              "runs_workspace_code": false,
+              "timeout_s": 5.0
+            }
+          ],
+          "config_fingerprint": "sha256:cf045e38a336dabcd09a746496d3d06bbbe84f50d51ea262e130508f716045c6",
+          "gateway_max_retries": 0,
+          "max_output_tokens": 256,
+          "model": "deepseek-flash",
+          "thinking": false,
+          "workflow": {
+            "feature_token_budget": 1,
+            "max_plan_calls": 1,
+            "max_plan_tokens": 4000,
+            "max_retries": 2,
+            "max_task_llm_calls": 6,
+            "max_task_tokens": 1,
+            "max_tool_calls_per_batch": 4,
+            "max_tool_rounds": 4,
+            "state_dir": ".lean-weave"
+          },
+          "write_allow": [
+            "src/small.py"
+          ]
+        },
+        "status": "budget_exhausted",
+        "verification_status": null
+      }
+    ],
+    "incomplete": false,
+    "live_skipped_reason": null,
+    "mode": "offline_mock",
+    "revision": "a7dca8722b3e4b0f2d79ca8324f972bc5d0bbfb5",
+    "schema_version": 1
+  }
+}

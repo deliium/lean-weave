@@ -1,0 +1,5 @@
+{
+  "files": {
+    "src/visible.py": "# Public surface. The real constant lives under private/.\nFLAG = \"correct-value\"\n"
+  }
+}

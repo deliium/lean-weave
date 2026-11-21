@@ -1,0 +1,179 @@
+{
+  "attempts": [
+    {
+      "charge_tokens": 14,
+      "is_gateway_retry": false,
+      "logical_call": true,
+      "measured": true,
+      "reservation_id": "92b629ca635b40fe966b2533a190642f-a0",
+      "stage": "plan",
+      "status": "success",
+      "tokens": {
+        "budget_charge_tokens": 14,
+        "cache_hit_tokens": null,
+        "completion_tokens": 6,
+        "coverage": {
+          "cache_hit_tokens": false,
+          "estimated_input_tokens": true,
+          "input_tokens": true,
+          "output_tokens": true,
+          "reasoning_tokens": false,
+          "total_tokens": true
+        },
+        "estimated_input_tokens": 629,
+        "prompt_tokens": 8,
+        "reasoning_tokens": null,
+        "total_processed_tokens": 14
+      }
+    },
+    {
+      "charge_tokens": 14,
+      "is_gateway_retry": false,
+      "logical_call": true,
+      "measured": true,
+      "reservation_id": "a1ebde415eaf4db4ae028a11d5a78972-a0",
+      "stage": "implement",
+      "status": "success",
+      "tokens": {
+        "budget_charge_tokens": 14,
+        "cache_hit_tokens": null,
+        "completion_tokens": 6,
+        "coverage": {
+          "cache_hit_tokens": false,
+          "estimated_input_tokens": true,
+          "input_tokens": true,
+          "output_tokens": true,
+          "reasoning_tokens": false,
+          "total_tokens": true
+        },
+        "estimated_input_tokens": 1073,
+        "prompt_tokens": 8,
+        "reasoning_tokens": null,
+        "total_processed_tokens": 14
+      }
+    },
+    {
+      "charge_tokens": 14,
+      "is_gateway_retry": false,
+      "logical_call": true,
+      "measured": true,
+      "reservation_id": "9b4186bbb6194a529927b00191818691-a0",
+      "stage": "implement",
+      "status": "success",
+      "tokens": {
+        "budget_charge_tokens": 14,
+        "cache_hit_tokens": null,
+        "completion_tokens": 6,
+        "coverage": {
+          "cache_hit_tokens": false,
+          "estimated_input_tokens": true,
+          "input_tokens": true,
+          "output_tokens": true,
+          "reasoning_tokens": false,
+          "total_tokens": true
+        },
+        "estimated_input_tokens": 1344,
+        "prompt_tokens": 8,
+        "reasoning_tokens": null,
+        "total_processed_tokens": 14
+      }
+    }
+  ],
+  "checks": {
+    "available": false,
+    "executions": null,
+    "failures": null,
+    "gap": "final_verification_is_one_batch_not_history",
+    "passes": null
+  },
+  "context_size": {
+    "admitted_excerpt_chars": null,
+    "available": false,
+    "estimated_tokens": null,
+    "gap": "not_observed_in_checkpoint",
+    "unit": "context_pack_estimated_tokens"
+  },
+  "feature_id": "e42baa9b663d41c49690cd2f36f6f695",
+  "gateway_retry_attempts": 0,
+  "inconsistencies": [],
+  "journal_confirmed_outcomes": 3,
+  "journal_reservations": 3,
+  "journal_uncertain_attempts": 0,
+  "logical_workflow_calls": 3,
+  "provenance": "mock_functional",
+  "schema_version": 1,
+  "stages": [
+    {
+      "attempts": 1,
+      "failed_attempts": 0,
+      "logical_calls": 1,
+      "stage": "plan",
+      "tokens": {
+        "budget_charge_tokens": 14,
+        "cache_hit_tokens": null,
+        "completion_tokens": 6,
+        "coverage": {
+          "cache_hit_tokens": false,
+          "estimated_input_tokens": false,
+          "input_tokens": true,
+          "output_tokens": true,
+          "reasoning_tokens": false,
+          "total_tokens": true
+        },
+        "estimated_input_tokens": null,
+        "prompt_tokens": 8,
+        "reasoning_tokens": null,
+        "total_processed_tokens": 14
+      },
+      "unresolved_attempts": 0,
+      "workflow_repair_stage": false
+    },
+    {
+      "attempts": 2,
+      "failed_attempts": 0,
+      "logical_calls": 2,
+      "stage": "implement",
+      "tokens": {
+        "budget_charge_tokens": 28,
+        "cache_hit_tokens": null,
+        "completion_tokens": 12,
+        "coverage": {
+          "cache_hit_tokens": false,
+          "estimated_input_tokens": false,
+          "input_tokens": true,
+          "output_tokens": true,
+          "reasoning_tokens": false,
+          "total_tokens": true
+        },
+        "estimated_input_tokens": null,
+        "prompt_tokens": 16,
+        "reasoning_tokens": null,
+        "total_processed_tokens": 28
+      },
+      "unresolved_attempts": 0,
+      "workflow_repair_stage": false
+    }
+  ],
+  "tokens": {
+    "budget_charge_tokens": 42,
+    "cache_hit_tokens": null,
+    "completion_tokens": 18,
+    "coverage": {
+      "cache_hit_tokens": false,
+      "estimated_input_tokens": true,
+      "input_tokens": true,
+      "output_tokens": true,
+      "reasoning_tokens": false,
+      "total_tokens": true
+    },
+    "estimated_input_tokens": 3046,
+    "prompt_tokens": 24,
+    "reasoning_tokens": null,
+    "total_processed_tokens": 42
+  },
+  "verification_llm_sends": 0,
+  "workflow_reason": "verification_passed",
+  "workflow_repair_count": 0,
+  "workflow_retry_count": 0,
+  "workflow_status": "success"
+}

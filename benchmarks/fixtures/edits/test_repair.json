@@ -1,0 +1,5 @@
+{
+  "files": {
+    "tests/test_mathops.py": "from src.mathops import add\n\n\ndef test_add():\n    assert add(1, 1) == 2\n"
+  }
+}

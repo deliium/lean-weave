@@ -1,0 +1,13 @@
+Benchmark runner v1 mode=offline_mock
+revision=a7dca8722b3e4b0f2d79ca8324f972bc5d0bbfb5
+cases=7 incomplete=False
+case=bug_fix status=success expected=success exit=0 verification=pass retries=0 oracle=True duration_ms=245
+case=single_file_feature status=success expected=success exit=0 verification=pass retries=0 oracle=True duration_ms=225
+case=multi_file_feature status=success expected=success exit=0 verification=pass retries=0 oracle=True duration_ms=208
+case=test_repair status=success expected=success exit=0 verification=pass retries=0 oracle=True duration_ms=245
+case=verify_then_repair status=success expected=success_after_repair exit=0 verification=pass retries=0 oracle=True duration_ms=227
+case=insufficient_context status=failed expected=failed exit=0 verification=unavailable retries=0 oracle=None duration_ms=162
+case=budget_exhaustion status=budget_exhausted expected=budget_exhausted exit=0 verification=unavailable retries=0 oracle=None duration_ms=163
+correctness=7/7
+live=not_run
+capture_errors=0

@@ -110,11 +110,12 @@ tools:
 
 Partial mappings merge with model defaults. All sections reject unknown keys.
 `provider` supports only `deepseek`; `timeout_s` must be finite and positive;
-`llm.max_retries` is 0–5 extra attempts (default 2); `llm.max_output_tokens`
-must be positive (default 1024). `workflow.max_retries` is reserved for future
-workflow retries; `workflow.feature_token_budget` is a positive total-processed
-token budget per feature (default 20000). Logging levels are DEBUG, INFO,
-WARNING, ERROR, CRITICAL; formats are text or json.
+`llm.max_retries` is 0–5 extra gateway transport attempts (default 2);
+`llm.max_output_tokens` must be positive (default 1024).
+`workflow.max_retries` bounds repair attempts after attributable verification
+failures (default 2). `workflow.feature_token_budget` is a positive
+total-processed token budget per feature (default 20000). Logging levels are
+DEBUG, INFO, WARNING, ERROR, CRITICAL; formats are text or json.
 `version` supports only 1. `api_key_env` must match `^[A-Z_][A-Z0-9_]*$`.
 `base_url` must be an absolute HTTPS URL with a host, no user information, and
 no query or fragment; an operator-selected path is preserved. The configured
@@ -147,8 +148,9 @@ YAML and JSON output.
 
 `wl context` and `lean-weave context` run entirely offline. They make no LLM
 calls, write no index or pack, do not require `DEEPSEEK_API_KEY`, and do not
-invoke the orchestrator or StateStore. Workflows are not wired to context yet;
-this milestone exposes the retrieval service directly.
+invoke the orchestrator or StateStore. They expose the retrieval service for
+manual inspection; the feature workflow builds its own stage-scoped packs
+through the same `ContextProvider` during `wl feature` / `wl resume`.
 
 ```bash
 # Case-sensitive literal search over eligible canonical snapshots
@@ -348,12 +350,17 @@ potentially billable smoke test; doctor and feature commands never invoke it.
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success or help |
+| 0 | Success, help, or a rendered typed feature outcome (`success`, `failed`, `budget_exhausted`, `interrupted`, `cancelled`) |
 | 1 | Operational failure, init refusal, unavailable dependency, doctor critical failure |
 | 2 | Usage/parser error |
-| 3 | Configuration read/parse/validation failure |
+| 3 | Configuration read/parse/validation failure (including invalid `--auto`/`--review` combinations and `state_dir_drift`) |
 
-Expected failures print safe errors without raw tracebacks.
+Feature `status` / `result` / `resume` / `cancel` print stable `key=value` fields
+(`feature_id`, `status`, `stage`, `reason`, `verification`, `usage`,
+`next_action` as applicable). They are not a JSON API.
+
+Expected failures print safe errors without raw tracebacks. See
+[Benchmarks](benchmarks.md) for offline/live measurement tooling.
 
 ## Dependency injection
 
@@ -391,16 +398,18 @@ injected attempt journal, an atomic `metrics_collector` slot, or the default
 JSONL ledger. A legacy collector that only implements `record_usage`/`totals`
 fails with `DependencyUnavailable` instead of silently bypassing budgets.
 
-## Not implemented in v1-04
+## MVP 1 exclusions
 
-The workflow is not wired to `ContextProvider` yet: no plan/implement/verify/retry
-execution, orchestration, code editing, or automatic retry. Context preview is a
-local, explicitly requested retrieval operation, not a workflow stage. There is
-no coding agent, LangGraph runtime, generic multi-provider router, MCP/ACP
-client, Docker orchestration, background worker or service. Architecture spikes
-remain optional validation tools, not the product runner.
+`wl feature` runs the bounded plan → implement → verify → repair loop with
+worktree isolation, approvals, and deterministic checks. Context preview remains
+a separate offline retrieval command. There is no LangGraph runtime, generic
+multi-provider router, MCP/ACP client, Docker orchestration, background worker,
+or nested coding-agent session. Architecture spikes under `spikes/` stay optional
+validation tools, not the product runner. See [MVP 1 readiness](mvp1-readiness.md).
 
 ## See Also
 
 - [Getting Started](getting-started.md) — installation and offline test environments
 - [Architecture](architecture.md) — component boundaries and decisions
+- [Benchmarks](benchmarks.md) — fixture corpus and token baseline tooling
+- [MVP 1 readiness](mvp1-readiness.md) — offline/live/safety verdicts

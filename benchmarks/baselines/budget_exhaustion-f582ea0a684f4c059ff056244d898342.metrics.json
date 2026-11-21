@@ -1,0 +1,49 @@
+{
+  "attempts": [],
+  "checks": {
+    "available": false,
+    "executions": null,
+    "failures": null,
+    "gap": "final_verification_is_one_batch_not_history",
+    "passes": null
+  },
+  "context_size": {
+    "admitted_excerpt_chars": null,
+    "available": false,
+    "estimated_tokens": null,
+    "gap": "not_observed_in_checkpoint",
+    "unit": "context_pack_estimated_tokens"
+  },
+  "feature_id": "f582ea0a684f4c059ff056244d898342",
+  "gateway_retry_attempts": 0,
+  "inconsistencies": [],
+  "journal_confirmed_outcomes": 0,
+  "journal_reservations": 0,
+  "journal_uncertain_attempts": 0,
+  "logical_workflow_calls": 0,
+  "provenance": "mock_functional",
+  "schema_version": 1,
+  "stages": [],
+  "tokens": {
+    "budget_charge_tokens": 0,
+    "cache_hit_tokens": null,
+    "completion_tokens": null,
+    "coverage": {
+      "cache_hit_tokens": false,
+      "estimated_input_tokens": false,
+      "input_tokens": false,
+      "output_tokens": false,
+      "reasoning_tokens": false,
+      "total_tokens": false
+    },
+    "estimated_input_tokens": null,
+    "prompt_tokens": null,
+    "reasoning_tokens": null,
+    "total_processed_tokens": null
+  },
+  "verification_llm_sends": 0,
+  "workflow_reason": "feature_token_limit",
+  "workflow_repair_count": 0,
+  "workflow_retry_count": 0,
+  "workflow_status": "budget_exhausted"
+}

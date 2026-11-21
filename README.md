@@ -2,7 +2,7 @@
 
 > Token-efficient AI coding pipeline — plan, implement, verify, and retry with structured state and minimal LLM tokens.
 
-lean-weave is a single-process feature workflow using DeepSeek and deterministic local verification. **v1-07** exposes the orchestrator through `wl feature` with isolated Git worktrees, `--auto` / `--review` modes, and explicit resume/cancel/status commands.
+lean-weave is a single-process feature workflow using DeepSeek and deterministic local verification. The public CLI exposes `wl feature` with isolated Git worktrees, `--auto` / `--review` modes, resume/cancel/status, and an offline MVP benchmark corpus under `benchmarks/`.
 
 ## Quick Start
 
@@ -51,6 +51,8 @@ uv run wl feature --help
 | [CLI Reference](docs/cli.md) | Commands, configuration, errors, injection |
 | [Code tools](docs/code-tools.md) | Offline reads, patches, checks, and Git metadata |
 | [Worktree workflow](docs/worktree-workflow.md) | Feature CLI, approvals, cancel, cleanup |
+| [Benchmarks](docs/benchmarks.md) | Fixture corpus, offline evidence, live preflight, V2 protocol |
+| [MVP 1 readiness](docs/mvp1-readiness.md) | Offline/live/safety verdicts and evidence links |
 
 ### Agent artifacts
 
@@ -63,6 +65,7 @@ uv run wl feature --help
 | [Plan v1-04](.ai-factory/plans/v1-04-context-builder.md) | Deterministic context builder |
 | [Plan v1-05](.ai-factory/plans/v1-05-code-tools.md) | Safe code editing and verification tools |
 | [Plan v1-06](.ai-factory/plans/v1-06-orchestrator.md) | Minimal deterministic workflow orchestrator |
+| [Plan v1-08](.ai-factory/plans/v1-08-e2e-validation.md) | End-to-end validation and token baseline |
 
 ## MVP 1 exclusions
 

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "id": "test_repair",
+  "tree": "test_repair",
+  "expected_head": "a1895dd7225578441cfd382761e28c61eea679d8",
+  "request": "Repair tests/test_mathops.py so it asserts add(1, 1) == 2 without deleting or emptying the test.",
+  "write_paths": [
+    "tests/test_mathops.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_test_repair"
+  ],
+  "checks": [
+    {
+      "id": "assert_test_repair",
+      "oracle": "assert_test_repair.py",
+      "target": "tests/test_mathops.py",
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{target}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "repair test",
+      "description": "Fix the assertion",
+      "files": [
+        "tests/test_mathops.py"
+      ],
+      "depends_on": []
+    }
+  ],
+  "workflow_limits": {},
+  "expected_behavior": {
+    "outcome": "success",
+    "status": "success"
+  },
+  "pass_criteria": {
+    "files": {
+      "tests/test_mathops.py": {
+        "must_contain": [
+          "assert add(1, 1) == 2"
+        ],
+        "must_not_contain": [
+          "assert add(1, 1) == 0"
+        ]
+      }
+    }
+  }
+}

@@ -133,6 +133,9 @@ class AttemptSummary(AccountingModel):
     estimated_charge: int = 0
     measured: bool = False
     counters: UsageCounters = Field(default_factory=UsageCounters)
+    # Reservation preflight inputs (read-only projection; never invent zeros).
+    estimated_input_tokens: int | None = Field(default=None, ge=0)
+    output_cap: int | None = Field(default=None, ge=0)
 
 
 class ModelUsageSummary(AccountingModel):

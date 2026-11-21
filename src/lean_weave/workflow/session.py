@@ -29,7 +29,7 @@ from lean_weave.logging_setup import get_logger
 from lean_weave.metrics.jsonl import JsonlMetricsCollector
 from lean_weave.schemas import FeatureState, Stage
 from lean_weave.verify.process import IsolationBackend
-from lean_weave.workflow.lifecycle import ExecutionMode, plan_digest
+from lean_weave.workflow.lifecycle import ExecutionMode, authority_digest, plan_digest
 from lean_weave.workflow.orchestrator import MinimalWorkflowOrchestrator
 from lean_weave.workflow.planning import PlanPolicy
 from lean_weave.workflow.results import WorkflowResult, WorkflowStatus, project_result
@@ -123,6 +123,9 @@ class FeatureSession:
                 approved_paths=frozenset(approval.write_allow),
                 approved_check_ids=frozenset(selected_checks),
             )
+            authority = self._authority_digest(
+                loaded.config, approval, selected_checks
+            )
             baseline = self._fingerprint(worktree, approval.write_allow)
             store = JsonCheckpointStore(worktree, state_dir=loaded.config.workflow.state_dir)
             journal = JsonlMetricsCollector.from_config(loaded.config, root=worktree)
@@ -154,8 +157,10 @@ class FeatureSession:
                         "ownership": provisioned.record.ownership.value,
                         "branch": provisioned.record.branch,
                         "worktree": str(worktree),
+                        "authority": authority,
                     },
                     "cancel_check": cancel_check,
+                    "authority_digest": authority,
                 },
             )
             assert isinstance(orchestrator, MinimalWorkflowOrchestrator)
@@ -214,16 +219,26 @@ class FeatureSession:
         if config_path is None:
             raise ConfigError("operator_config_required")
         loaded = self._load_operator_config(config_path, worktree=worktree)
+        if loaded.config.workflow.state_dir != record.state_dir:
+            log.warning(
+                "[Session.resume] feature=%s outcome=state_dir_drift",
+                safe,
+            )
+            raise ConfigError("state_dir_drift")
         approval = self._build_approval(worktree, loaded.config, config_path)
         selected_checks = self._select_checks(approval, check_ids)
         policy = PlanPolicy(
             approved_paths=frozenset(approval.write_allow),
             approved_check_ids=frozenset(selected_checks),
         )
+        authority = self._authority_digest(
+            loaded.config, approval, selected_checks
+        )
         # Recompute the live fingerprint at acceptance time. Reusing the saved
         # value would make every post-pause edit silently acceptable.
         baseline = self._fingerprint(worktree, approval.write_allow)
-        journal = JsonlMetricsCollector.from_config(loaded.config, root=worktree)
+        # Journal must follow the frozen routing state_dir, never a drifted config.
+        journal = JsonlMetricsCollector((worktree / record.state_dir).resolve())
         context = AppContext(
             config=loaded.config,
             config_source=loaded.source,
@@ -254,8 +269,10 @@ class FeatureSession:
                     "ownership": record.ownership.value,
                     "branch": record.branch,
                     "worktree": str(worktree),
+                    "authority": authority,
                 },
                 "cancel_check": cancel_check,
+                "authority_digest": authority,
             },
         )
         assert isinstance(orchestrator, MinimalWorkflowOrchestrator)
@@ -702,6 +719,34 @@ class FeatureSession:
         if not matched:
             raise ConfigError("write_allow_empty")
         return matched
+
+    def _authority_digest(
+        self,
+        config: AppConfig,
+        approval: ToolApproval,
+        check_ids: Sequence[str],
+    ) -> str:
+        checks = [
+            {
+                "id": check.id,
+                "executable": check.executable,
+                "argv": list(check.argv),
+                "timeout_s": check.timeout_s,
+                "output_bytes_max": check.output_bytes_max,
+                "runs_workspace_code": check.runs_workspace_code,
+            }
+            for check in approval.checks
+        ]
+        return authority_digest(
+            write_allow=approval.write_allow,
+            checks=checks,
+            check_ids=check_ids,
+            state_dir=config.workflow.state_dir,
+            max_retries=config.workflow.max_retries,
+            max_task_tokens=config.workflow.max_task_tokens,
+            feature_token_budget=config.workflow.feature_token_budget,
+            max_task_llm_calls=config.workflow.max_task_llm_calls,
+        )
 
     def _select_checks(
         self, approval: ToolApproval, check_ids: Sequence[str] | None

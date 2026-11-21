@@ -5,7 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from lean_weave.cli import app
-from lean_weave.config import ContextConfig, init_config
+from lean_weave.config import AppConfig, ContextConfig, dump_config, init_config
 from lean_weave.context.builder import ContextBuilder
 from lean_weave.context.models import ContextQuery, ExpansionLevel, content_digest
 from lean_weave.context.provider import DeterministicContextProvider
@@ -82,6 +82,13 @@ def test_real_project_through_cli_with_generated_config(tmp_path, monkeypatch):
     monkeypatch.chdir(ROOT)
     config = tmp_path / "config.yaml"
     init_config(config)
+    # The repository now carries the benchmark corpus. Give the generated
+    # config enough prompt budget to admit the requested symbol excerpt so the
+    # integration check stays deterministic as the project grows.
+    config.write_text(
+        dump_config(AppConfig(context=ContextConfig(stage_prompt_tokens_max=12000))),
+        encoding="utf-8",
+    )
     result = runner.invoke(
         app,
         [

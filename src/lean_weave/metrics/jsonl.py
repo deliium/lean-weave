@@ -655,6 +655,8 @@ class JsonlMetricsCollector:
                         status="unresolved",
                         charge_tokens=reserved,
                         estimated_charge=reserved,
+                        estimated_input_tokens=reservation.estimated_input_tokens,
+                        output_cap=reservation.output_cap,
                     )
                 )
                 continue
@@ -710,6 +712,8 @@ class JsonlMetricsCollector:
                     estimated_charge=0 if measured else charge,
                     measured=measured,
                     counters=counters,
+                    estimated_input_tokens=reservation.estimated_input_tokens,
+                    output_cap=reservation.output_cap,
                 )
             )
 

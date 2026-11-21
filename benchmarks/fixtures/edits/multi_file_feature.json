@@ -1,0 +1,6 @@
+{
+  "files": {
+    "src/config.py": "VERSION = \"1.0.0\"\n",
+    "src/app.py": "from src.config import VERSION\n\n\ndef banner():\n    return f\"v{VERSION}\"\n"
+  }
+}

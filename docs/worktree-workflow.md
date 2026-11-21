@@ -36,9 +36,17 @@ uv run wl --config /secure/operator.yaml resume <feature-id> --approve <token>
 ```
 
 The token is bound to the canonical plan, feature ID, worktree identity, pinned
-HEAD, frozen policy, and a fingerprint of the approved files. Any edit to an
-approved file after the pause makes the approval stale; the run stays paused and
-reports `stale_baseline`. Start a new feature instead of widening an old gate.
+HEAD, frozen policy, approved write paths, **check definitions** (executable,
+argv, limits, data-only flag), effective workflow limits, `workflow.state_dir`,
+and a fingerprint of the approved files. Any edit to an approved file after the
+pause makes the approval stale (`stale_baseline`). Same-ID check argv drift,
+limit drift, or `state_dir` drift refuses resume before another provider
+dispatch (`authority_drift` / `state_dir_drift`). Start a new feature instead of
+widening an old gate.
+
+A linked worktree isolates Git content; it is **not** an OS execution sandbox.
+Public acceptance checks must be trusted external data-only commands. There is
+no public workspace-code isolation backend in MVP 1.
 
 ## Lifecycle
 

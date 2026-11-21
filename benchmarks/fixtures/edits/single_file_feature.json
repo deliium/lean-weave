@@ -1,0 +1,5 @@
+{
+  "files": {
+    "src/greeter.py": "def greet(name):\n    return f\"Hello, {name}\"\n"
+  }
+}

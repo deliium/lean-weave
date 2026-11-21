@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "id": "multi_file_feature",
+  "tree": "multi_file_feature",
+  "expected_head": "4bb4658e513579e5a9eaf514bf39ddf2ad1f38df",
+  "request": "Bump VERSION to 1.0.0 and make banner() return a v-prefixed label.",
+  "write_paths": [
+    "src/config.py",
+    "src/app.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_multi_file"
+  ],
+  "checks": [
+    {
+      "id": "assert_multi_file",
+      "oracle": "assert_multi_file.py",
+      "target": null,
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{workspace}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "bump version",
+      "description": "Set VERSION to 1.0.0",
+      "files": [
+        "src/config.py"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "2",
+      "title": "update banner",
+      "description": "Return v-prefixed VERSION",
+      "files": [
+        "src/app.py"
+      ],
+      "depends_on": [
+        "1"
+      ]
+    }
+  ],
+  "workflow_limits": {},
+  "expected_behavior": {
+    "outcome": "success",
+    "status": "success"
+  },
+  "pass_criteria": {
+    "files": {
+      "src/config.py": {
+        "must_contain": [
+          "VERSION = \"1.0.0\""
+        ]
+      },
+      "src/app.py": {
+        "must_contain": [
+          "v"
+        ]
+      }
+    }
+  }
+}

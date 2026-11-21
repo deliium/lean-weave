@@ -53,13 +53,30 @@ digest. Budgets and exclusions are configured under `context` in
 ## Feature workflow (worktree + CLI)
 
 Public feature commands require Git and an operator config **outside** the
-repository. See [Worktree workflow](worktree-workflow.md).
+repository. Repository defaults alone never authorize writes or checks. API
+keys stay in the environment (`DEEPSEEK_API_KEY`). See
+[Worktree workflow](worktree-workflow.md).
 
 ```bash
 uv run wl --config /secure/operator.yaml feature "describe the change" --review
+uv run wl --config /secure/operator.yaml resume <feature-id> --approve <token>
 uv run wl status <feature-id>
 uv run wl result <feature-id>
+uv run wl cancel <feature-id>
 ```
+
+Typed feature outcomes (success, failure, budget exhaustion, interruption,
+cancellation) render as `key=value` lines and exit `0`. Parser misuse exits
+`2`; configuration errors exit `3`; other operational failures exit `1`.
+
+## Offline MVP validation
+
+```bash
+uv run --locked pytest tests/cli/test_feature_offline_e2e.py tests/benchmarks/
+```
+
+See [Benchmarks](benchmarks.md) for fixtures, metric units, and the explicit
+live DeepSeek preflight.
 
 ## Library workflow entry point
 

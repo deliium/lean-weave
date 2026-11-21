@@ -70,8 +70,8 @@ Design constraints:
 - Plan and verify use approved metadata digests only. Implement reads task paths,
   one-hop imports, and enabled matching tests. Retry reads eligible affected
   files and ignores arbitrary diagnostics.
-- Workflows are not wired to the provider in v1-04; `wl context` is an offline
-  preview surface.
+- The feature workflow builds stage-scoped packs through `ContextProvider`.
+  `wl context` remains a separate offline preview surface.
 
 ## Standalone code tools
 

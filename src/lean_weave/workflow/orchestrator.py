@@ -114,6 +114,7 @@ class MinimalWorkflowOrchestrator:
         baseline_fingerprint: BaselineFn | None = None,
         binding_extra: BindingFn | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        authority_digest: str | None = None,
     ) -> None:
         if not checkpoint_capability(state_store):
             raise DependencyUnavailable("StateStore cannot provide atomic workflow checkpoints")
@@ -135,6 +136,7 @@ class MinimalWorkflowOrchestrator:
         self._baseline_fingerprint = baseline_fingerprint
         self._binding_extra = binding_extra
         self._cancel_check = cancel_check
+        self._authority_digest = authority_digest
         self._state: FeatureState | None = None
         self._control: ControlRecord | None = None
 
@@ -155,6 +157,7 @@ class MinimalWorkflowOrchestrator:
             workspace=self._workspace,
             mode=self._mode,
             pinned_head=self._pinned_head,
+            authority_digest=self._authority_digest,
         )
         self._store.create_checkpoint(state, control)  # type: ignore[attr-defined]
         self._state, self._control = state, control
@@ -186,6 +189,7 @@ class MinimalWorkflowOrchestrator:
             workspace=self._workspace,
             mode=ExecutionMode.AUTO,
             pinned_head=self._pinned_head,
+            authority_digest=self._authority_digest,
         )
         self._store.create_checkpoint(state, control)  # type: ignore[attr-defined]
         self._state, self._control = state, control
@@ -202,6 +206,14 @@ class MinimalWorkflowOrchestrator:
                 self._state.stage.value,
             )
             return self._state
+        if self._authority_digest is not None:
+            frozen = self._control.authority_digest
+            if frozen is None or frozen != self._authority_digest:
+                log.warning(
+                    "[Orchestrator.resume] feature=%s outcome=authority_drift",
+                    feature_id,
+                )
+                return self._interrupt("authority_drift")
         if self._control.pending_effect is not None:
             log.warning("[Orchestrator.resume] feature=%s outcome=unresolved_effect", feature_id)
             return self._interrupt("unresolved_effect")

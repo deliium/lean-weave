@@ -43,7 +43,7 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "spikes"]
+pythonpath = ["src", "spikes", "."]
 addopts = "-q"
 markers = ["network: explicitly allow network connections (offline by default)"]
 filterwarnings = [

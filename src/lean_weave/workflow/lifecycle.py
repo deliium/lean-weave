@@ -11,7 +11,7 @@ import hashlib
 import json
 import secrets
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from typing import Any, Literal
 
@@ -113,6 +113,59 @@ def policy_material(policy: PlanPolicy) -> dict[str, Any]:
         "bypass_allowed": policy.bypass_allowed,
         "require_bypass_checks": policy.require_bypass_checks,
     }
+
+
+def authority_digest(
+    *,
+    write_allow: Sequence[str],
+    checks: Sequence[Mapping[str, Any]],
+    check_ids: Sequence[str],
+    state_dir: str,
+    max_retries: int,
+    max_task_tokens: int,
+    feature_token_budget: int,
+    max_task_llm_calls: int,
+) -> str:
+    """Digest of effective execution authority (paths, check bodies, limits).
+
+    Path/ID allowlists alone are not enough: same-ID check argv drift and
+    execution-limit drift must invalidate frozen review/resume bindings.
+    """
+
+    selected = set(check_ids)
+    check_rows = [
+        {
+            "id": str(item.get("id", "")),
+            "executable": str(item.get("executable", "")),
+            "argv": [str(entry) for entry in list(item.get("argv") or ())],
+            "timeout_s": float(item.get("timeout_s", 0)),
+            "output_bytes_max": int(item.get("output_bytes_max", 0)),
+            "runs_workspace_code": bool(item.get("runs_workspace_code", False)),
+        }
+        for item in checks
+        if str(item.get("id", "")) in selected
+    ]
+    check_rows.sort(key=lambda row: row["id"])
+    material = {
+        "write_allow": sorted(write_allow),
+        "check_ids": list(check_ids),
+        "checks": check_rows,
+        "state_dir": state_dir,
+        "max_retries": int(max_retries),
+        "max_task_tokens": int(max_task_tokens),
+        "feature_token_budget": int(feature_token_budget),
+        "max_task_llm_calls": int(max_task_llm_calls),
+    }
+    payload = json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    digest = digest_bytes(payload)
+    log.debug(
+        "[Workflow.lifecycle] op=authority_digest checks=%s state_dir=%s",
+        len(check_rows),
+        state_dir,
+    )
+    return digest
 
 
 def binding_digest(

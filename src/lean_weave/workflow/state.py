@@ -144,6 +144,11 @@ class ControlRecord(_StateModel):
     review_gate: ReviewGate | None = None
     continuation: ContinuationCursor | None = None
     pinned_head: str | None = Field(default=None, max_length=64)
+    # Frozen execution authority (check bodies, limits, state_dir, write paths).
+    # Absent on legacy envelopes; resume then cannot prove authority continuity.
+    authority_digest: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
     # Durable in-flight stage marker. A crash that leaves this set means the
     # stage outcome checkpoint never landed; resume must fail closed.
     inflight_stage: str | None = Field(default=None, max_length=16)
