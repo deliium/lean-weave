@@ -56,6 +56,7 @@ uv run wl feature --help
 | [CLI Reference](docs/cli.md) | Commands, configuration, errors, injection |
 | [Code tools](docs/code-tools.md) | Offline reads, patches, checks, and Git metadata |
 | [Code index](docs/code-index.md) | Disposable SQLite cache, maintenance, recovery, isolation |
+| [Context retrieval](docs/context-retrieval.md) | Task-aware hybrid ranking, CLI preview, evaluation |
 | [Repository map](docs/repository-map.md) | Compact offline maps, budgets, and indexed context preview |
 | [Worktree workflow](docs/worktree-workflow.md) | Feature CLI, approvals, cancel, cleanup |
 | [Benchmarks](docs/benchmarks.md) | Fixture corpus, offline evidence, live preflight, V2 protocol |

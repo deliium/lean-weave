@@ -471,17 +471,37 @@ def prepare_case(
     )
 
 
+def installed_scripts_dir() -> Path:
+    """Directory that holds sibling console scripts for this checkout's venv."""
+
+    return Path(__file__).resolve().parent.parent / ".venv" / "bin"
+
+
+def installed_entry(name: str = "wl") -> list[str]:
+    """Prefer a named console script installed next to ``wl`` / ``lean-weave``."""
+
+    if name not in {"wl", "lean-weave"}:
+        raise ValueError(f"unsupported_entry:{name}")
+    candidate = installed_scripts_dir() / name
+    if candidate.is_file():
+        return [str(candidate)]
+    if name == "wl":
+        return ["uv", "run", "--locked", "wl"]
+    return ["uv", "run", "--locked", "lean-weave"]
+
+
 def installed_wl() -> list[str]:
     """Prefer the console script installed into the local uv environment."""
 
-    repo = Path(__file__).resolve().parent.parent
-    candidate = repo / ".venv" / "bin" / "wl"
-    if candidate.is_file():
-        return [str(candidate)]
-    return ["uv", "run", "--locked", "wl"]
+    return installed_entry("wl")
 
 
-def run_installed(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_installed(
+    *args: str,
+    cwd: Path,
+    env: Mapping[str, str] | None = None,
+    entry: str = "wl",
+) -> subprocess.CompletedProcess[str]:
     merged = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(cwd),
@@ -493,7 +513,7 @@ def run_installed(*args: str, cwd: Path, env: Mapping[str, str] | None = None) -
     # Drop any live API key for offline executable smokes.
     merged.pop("DEEPSEEK_API_KEY", None)
     return subprocess.run(
-        [*installed_wl(), *args],
+        [*installed_entry(entry), *args],
         cwd=str(cwd),
         env=merged,
         check=False,

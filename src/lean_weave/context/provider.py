@@ -32,6 +32,8 @@ from lean_weave.context.python_index import (
 )
 from lean_weave.context.ranking import matching_tests
 from lean_weave.context.repository import FileSnapshot, Repository
+from lean_weave.context.retrieval_models import RetrievalRequest, RetrievalResult
+from lean_weave.context.retriever import ContextRetriever
 from lean_weave.errors import CodeIndexError, ForbiddenContext, InvalidContextRequest
 from lean_weave.logging_setup import get_logger
 from lean_weave.schemas import FeatureState, ImplementationTask
@@ -80,6 +82,7 @@ class DeterministicContextProvider:
         state_dir: str = ".lean-weave",
         metadata_digests: Mapping[str, str] | None = None,
         fact_loader_factory: Callable[[], ContextManager[Callable[[FileSnapshot], PythonFacts]]] | None = None,
+        retriever_factory: Callable[[], ContextRetriever] | None = None,
     ) -> None:
         self.root = (root if root is not None else Path.cwd()).resolve()
         self.config = config
@@ -95,6 +98,32 @@ class DeterministicContextProvider:
             if key in _ALLOWED_METADATA_KEYS and isinstance(value, str) and value
         }
         self.fact_loader_factory = fact_loader_factory
+        self.retriever_factory = retriever_factory
+        self._retriever: ContextRetriever | None = None
+
+    def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        """Run an explicit offline retrieval preview; never used by stage builds."""
+
+        retriever = self._get_retriever()
+        log.debug("[Context.provider] retrieve task_kind=%s kind=%s", request.task_kind, request.kind)
+        return retriever.retrieve(request)
+
+    def _get_retriever(self) -> ContextRetriever:
+        if self._retriever is not None:
+            return self._retriever
+        if self.retriever_factory is not None:
+            log.debug("[Context.provider] retriever selection=factory")
+            self._retriever = self.retriever_factory()
+            return self._retriever
+        log.debug("[Context.provider] retriever selection=local_fallback")
+        repository = Repository(
+            self.root,
+            self.context_config,
+            state_dir=self.state_dir,
+            strict_source=True,
+        )
+        self._retriever = ContextRetriever(repository)
+        return self._retriever
 
     # ------------------------------------------------------------------
     # Shared helpers

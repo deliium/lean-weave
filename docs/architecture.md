@@ -17,6 +17,7 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Deterministic context retrieval** — bounded repository inventory, AST symbols/imports, literal search with an `rg`/Python fallback, lexicographic ranking, and prompt budgets; no embeddings or LLM calls
 - **Disposable code index** — an optional SQLite cache of admitted Python facts outside the checkout; read-only reuse only, never a prompt authority, never written by the workflow
 - **Repository map** — in-memory static dependency graph and budgeted views over a checked index generation; explicit `wl map` / `--indexed-map` only
+- **Task-aware retrieval** — opt-in hybrid ranking over a strict text scan plus optional checked graph/Git signals; explicit `wl context rank|explain|search --task-aware` and `DeterministicContextProvider.retrieve` only (see [context-retrieval.md](context-retrieval.md))
 - **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata through an explicit caller approval snapshot
 - **Worktree session** — public CLI provisions or adopts a linked worktree, freezes approvals, and drives the existing orchestrator without a second engine
 

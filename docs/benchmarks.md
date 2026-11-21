@@ -28,6 +28,19 @@ identity/timestamps and never initializes the developer checkout.
 uv run --locked pytest tests/benchmarks/test_fixtures.py
 ```
 
+## Retrieval quality comparison
+
+Labeled V1 vs V2 ranking cases live under
+`benchmarks/fixtures/retrieval/` and are scored by
+`python -m benchmarks.retrieval` (not a `wl` command). See
+[context-retrieval.md](context-retrieval.md) for metrics, limitations, and
+commands:
+
+```bash
+uv run --locked python -m benchmarks.retrieval --json
+uv run --locked pytest tests/benchmarks/test_retrieval.py
+```
+
 ## Offline evidence (default)
 
 In-process CLI evidence injects `httpx2.MockTransport` at the DeepSeek HTTP

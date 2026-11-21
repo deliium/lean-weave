@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ConfigModel(BaseModel):
@@ -72,6 +72,34 @@ class WorkflowConfig(ConfigModel):
         return value
 
 
+class RetrievalWeights(ConfigModel):
+    """Integer signal weights for offline task-aware ranking (0–100 each)."""
+
+    exact_symbol: int = Field(default=36, ge=0, le=100)
+    name: int = Field(default=24, ge=0, le=100)
+    lexical: int = Field(default=24, ge=0, le=100)
+    import_dependency: int = Field(default=8, ge=0, le=100)
+    reverse_dependency: int = Field(default=8, ge=0, le=100)
+    git_diff: int = Field(default=5, ge=0, le=100)
+    related_test: int = Field(default=8, ge=0, le=100)
+    map_importance: int = Field(default=3, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def require_direct_candidate_weight(self) -> "RetrievalWeights":
+        if self.exact_symbol <= 0 and self.name <= 0 and self.lexical <= 0:
+            raise ValueError(
+                "at least one of exact_symbol, name, or lexical must be positive"
+            )
+        return self
+
+
+class RetrievalConfig(ConfigModel):
+    """Opt-in offline retrieval limits; never enables workflow stage retrieval."""
+
+    top_k: int = Field(default=10, ge=1, le=100)
+    weights: RetrievalWeights = Field(default_factory=RetrievalWeights)
+
+
 class ContextConfig(ConfigModel):
     """Strict deterministic-retrieval limits; every cap is a hard maximum."""
 
@@ -88,6 +116,7 @@ class ContextConfig(ConfigModel):
     map_tokens_max: int = Field(default=1024, ge=1, le=8192)
     map_rows_max: int = Field(default=80, ge=1, le=500)
     exclusions: list[str] = Field(default_factory=list)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
 
     @field_validator("exclusions")
     @classmethod

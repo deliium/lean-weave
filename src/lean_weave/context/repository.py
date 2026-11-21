@@ -14,7 +14,7 @@ import re
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Iterator, Literal, Mapping
 
 import pathspec
 
@@ -43,6 +43,8 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _STRICT_DEPTH_MAX = 128
 _READ_CHUNK = 65536
 
+ScanMode = Literal["python", "retrieval"]
+
 
 @dataclass(frozen=True)
 class FileSnapshot:
@@ -67,12 +69,27 @@ class Inventory:
 
 
 @dataclass(frozen=True)
-class PythonSourceScan:
-    """Strict Python admission result for one observed checkout generation."""
+class FrozenAdmissionPolicy:
+    """Effective strict-scan policy captured at session open."""
+
+    root: str
+    state_dir: str
+    protected_paths: tuple[str, ...]
+    exclusions: tuple[str, ...]
+    candidate_bytes_max: int
+    scan_bytes_max: int
+    visited_entries_max: int
+    mode: ScanMode
+
+
+@dataclass(frozen=True)
+class SourceScan:
+    """Strict admission result for one observed checkout generation."""
 
     snapshots: tuple[FileSnapshot, ...]
     complete: bool
     omission_counts: Mapping[str, int]
+    policy: FrozenAdmissionPolicy
     _session: "_StrictScanner | None" = field(default=None, repr=False, compare=False)
 
     def revalidate(self) -> bool:
@@ -81,6 +98,57 @@ class PythonSourceScan:
         if self._session is None:
             return False
         return self._session.revalidate()
+
+    def matches_retrieval_policy(self, repository: "Repository") -> bool:
+        """Return True when frozen policy still matches *repository* and the open root."""
+
+        if self._session is None or self._session.root_fd < 0:
+            return False
+        if self._session._root_witness is None:
+            return False
+        live = FrozenAdmissionPolicy(
+            root=str(repository.root),
+            state_dir=repository.state_dir,
+            protected_paths=tuple(repository.protected_paths),
+            exclusions=tuple(repository.config.exclusions),
+            candidate_bytes_max=repository.config.candidate_bytes_max,
+            scan_bytes_max=repository.config.scan_bytes_max,
+            visited_entries_max=repository.config.visited_entries_max,
+            mode=self.policy.mode,
+        )
+        if live != self.policy:
+            return False
+        try:
+            opened = os.fstat(self._session.root_fd)
+            path_info = os.stat(self.policy.root, follow_symlinks=False)
+        except OSError:
+            return False
+        if _identity(opened) != self._session._root_witness:
+            return False
+        return (path_info.st_dev, path_info.st_ino) == (opened.st_dev, opened.st_ino)
+
+
+# Compatibility alias for V2-01 callers.
+PythonSourceScan = SourceScan
+
+
+def _is_canonical_retrieval_path(rel: str) -> bool:
+    """Return True when *rel* is a canonical UTF-8 printable relative path."""
+
+    if not rel or any(ord(char) < 32 or ord(char) == 127 for char in rel):
+        return False
+    if not rel.isprintable():
+        return False
+    try:
+        rel.encode("utf-8", "strict")
+    except UnicodeEncodeError:
+        return False
+    if len(rel) > 1 and rel[1] == ":":
+        return False
+    try:
+        return normalize_relative_path(rel) == rel
+    except InvalidContextRequest:
+        return False
 
 
 def validate_index_source_path(
@@ -393,16 +461,32 @@ class Repository:
         return self._admit(normalized)
 
     @contextlib.contextmanager
-    def scan_python_sources(self) -> Iterator[PythonSourceScan]:
+    def scan_python_sources(self) -> Iterator[SourceScan]:
         """Admit Python sources through the strict, descriptor-relative path.
 
         The context keeps the anchored root descriptor open so the caller can
         revalidate observations immediately before publishing.
         """
 
+        with self._scan_sources(mode="python") as scan:
+            yield scan
+
+    @contextlib.contextmanager
+    def scan_retrieval_sources(self) -> Iterator[SourceScan]:
+        """Admit supported text sources for offline retrieval evidence.
+
+        Freezes the effective admission policy at session open so later
+        mutations of :class:`ContextConfig` cannot change the observed pool.
+        """
+
+        with self._scan_sources(mode="retrieval") as scan:
+            yield scan
+
+    @contextlib.contextmanager
+    def _scan_sources(self, *, mode: ScanMode) -> Iterator[SourceScan]:
         if not self.strict_source:
             raise ContextScanError("Strict source admission is not enabled")
-        scanner = _StrictScanner(self)
+        scanner = _StrictScanner(self, mode=mode)
         scanner.open()
         try:
             yield scanner.run()
@@ -515,9 +599,26 @@ class Repository:
 class _StrictScanner:
     """One anchored, descriptor-relative scan with a bounded witness set."""
 
-    def __init__(self, repository: Repository) -> None:
+    def __init__(self, repository: Repository, *, mode: ScanMode = "python") -> None:
         self.repository = repository
-        self.config = repository.config
+        self.mode = mode
+        exclusions = tuple(repository.config.exclusions)
+        self.policy = FrozenAdmissionPolicy(
+            root=str(repository.root),
+            state_dir=repository.state_dir,
+            protected_paths=tuple(repository.protected_paths),
+            exclusions=exclusions,
+            candidate_bytes_max=repository.config.candidate_bytes_max,
+            scan_bytes_max=repository.config.scan_bytes_max,
+            visited_entries_max=repository.config.visited_entries_max,
+            mode=mode,
+        )
+        self._config_spec: pathspec.PathSpec | None = None
+        if exclusions:
+            try:
+                self._config_spec = pathspec.PathSpec.from_lines("gitwildmatch", exclusions)
+            except (re.error, ValueError, TypeError):
+                raise ConfigError("Invalid context.exclusions pattern") from None
         self.root_fd = -1
         self._visited = 0
         self._bytes_read = 0
@@ -543,7 +644,7 @@ class _StrictScanner:
             raise ContextScanError("Strict source admission is unavailable on this platform")
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
         try:
-            self.root_fd = os.open(self.repository.root, flags)
+            self.root_fd = os.open(self.policy.root, flags)
         except OSError:
             raise ContextScanError("Cannot open the project root for strict admission") from None
         try:
@@ -556,6 +657,14 @@ class _StrictScanner:
             raise ContextScanError("Project root is not a directory")
         self._root_witness = _identity(info)
         self._dir_witnesses.append(("", _identity(info)))
+        log.debug(
+            "[Context.strict] open mode=%s candidate_bytes_max=%s scan_bytes_max=%s visited_entries_max=%s exclusions=%s",
+            self.policy.mode,
+            self.policy.candidate_bytes_max,
+            self.policy.scan_bytes_max,
+            self.policy.visited_entries_max,
+            len(self.policy.exclusions),
+        )
 
     def close(self) -> None:
         if self.root_fd >= 0:
@@ -574,28 +683,30 @@ class _StrictScanner:
         self._complete = False
 
     def _remaining_bytes(self) -> int:
-        return self.config.scan_bytes_max - self._bytes_read
+        return self.policy.scan_bytes_max - self._bytes_read
 
     # ------------------------------------------------------------------
     # Run
     # ------------------------------------------------------------------
-    def run(self) -> PythonSourceScan:
+    def run(self) -> SourceScan:
         try:
             self._walk_dir(self.root_fd, "", 0)
             complete = self._complete
             if not complete:
                 log.warning("[Context.strict] scan incomplete; publication is refused")
             log.debug(
-                "[Context.strict] admitted=%s omissions=%s visited=%s complete=%s",
+                "[Context.strict] mode=%s admitted=%s omissions=%s visited=%s complete=%s",
+                self.policy.mode,
                 len(self._snapshots),
                 sum(self._counts.values()),
                 self._visited,
                 complete,
             )
-            return PythonSourceScan(
+            return SourceScan(
                 snapshots=tuple(sorted(self._snapshots, key=lambda item: item.path)),
                 complete=complete,
                 omission_counts=dict(self._counts),
+                policy=self.policy,
                 _session=self,
             )
         except BaseException:
@@ -611,7 +722,7 @@ class _StrictScanner:
             return
         if not self._load_ignore_file(dir_fd, rel_dir):
             return
-        remaining = self.config.visited_entries_max - self._visited
+        remaining = self.policy.visited_entries_max - self._visited
         try:
             with os.scandir(dir_fd) as iterator:
                 entries: list[os.DirEntry] = []
@@ -659,7 +770,7 @@ class _StrictScanner:
         if info.st_nlink != 1:
             self._incomplete("ignore_indeterminate")
             return False
-        if info.st_size > self.config.candidate_bytes_max:
+        if info.st_size > self.policy.candidate_bytes_max:
             self._incomplete("ignore_oversized")
             return False
         status, snapshot = self._read_strict(dir_fd, name, info, rel)
@@ -699,15 +810,19 @@ class _StrictScanner:
                 continue
             if result.include is not None:
                 ignored = bool(result.include)
-        config_spec = self.repository._config_spec
-        if config_spec is not None:
+        if self._config_spec is not None:
             try:
-                result = config_spec.check_file(target)
+                result = self._config_spec.check_file(target)
             except (ValueError, TypeError):
                 result = None
             if result is not None and result.include is True:
                 ignored = True
         return ignored
+
+    def _accepts_file(self, rel: str) -> bool:
+        if self.mode == "retrieval":
+            return is_supported_text(rel)
+        return is_python(rel)
 
     # ------------------------------------------------------------------
     # Visits
@@ -715,13 +830,19 @@ class _StrictScanner:
     def _visit(self, entry: os.DirEntry, dir_fd: int, rel_dir: str, depth: int) -> None:
         name = entry.name
         rel = f"{rel_dir}/{name}" if rel_dir else name
+        if self.mode == "retrieval" and not _is_canonical_retrieval_path(rel):
+            self._incomplete("unreadable")
+            return
         if contains_secret(rel):
             self._count("secret")
             return
         try:
             info = entry.stat(follow_symlinks=False)
         except OSError:
-            self._count("unreadable")
+            if self.mode == "retrieval":
+                self._incomplete("unreadable")
+            else:
+                self._count("unreadable")
             return
         if stat.S_ISLNK(info.st_mode):
             self._count("excluded")
@@ -732,23 +853,23 @@ class _StrictScanner:
         if not stat.S_ISREG(info.st_mode):
             self._count("unsupported")
             return
-        if is_hard_denied(rel, state_dir=self.repository.state_dir):
+        if is_hard_denied(rel, state_dir=self.policy.state_dir):
             self._count("hard_denied")
             return
         if self._is_ignored(rel, is_dir=False):
             self._count("excluded")
             return
-        if not is_python(rel):
+        if not self._accepts_file(rel):
             self._count("unsupported")
             return
-        if rel in self.repository.protected_paths:
+        if rel in self.policy.protected_paths:
             self._count("excluded")
             return
         self._file_witnesses.append((rel_dir, name, _identity(info)))
         if info.st_nlink != 1:
             self._count("excluded")
             return
-        if info.st_size > self.config.candidate_bytes_max:
+        if info.st_size > self.policy.candidate_bytes_max:
             self._count("oversized")
             return
         status, snapshot = self._read_strict(dir_fd, name, info, rel)
@@ -766,7 +887,10 @@ class _StrictScanner:
         rel: str,
         depth: int,
     ) -> None:
-        if is_hard_denied_dir(rel, state_dir=self.repository.state_dir):
+        if self.mode == "retrieval" and not _is_canonical_retrieval_path(rel):
+            self._incomplete("unreadable")
+            return
+        if is_hard_denied_dir(rel, state_dir=self.policy.state_dir):
             self._count("hard_denied")
             return
         if self._is_ignored(rel, is_dir=True):
@@ -821,7 +945,7 @@ class _StrictScanner:
             if not stat.S_ISREG(opened.st_mode) or _identity(opened) != _identity(expected):
                 self._incomplete("unreadable")
                 return "unreadable", None
-            cap = min(self.config.candidate_bytes_max, max(allowed, 0))
+            cap = min(self.policy.candidate_bytes_max, max(allowed, 0))
             chunks: list[bytes] = []
             total = 0
             while total <= cap:
@@ -840,7 +964,9 @@ class _StrictScanner:
         self._bytes_read += total
         if total > cap:
             # Growth or insufficient budget during the read is uncertainty.
-            self._incomplete("scan_limit" if allowed < self.config.candidate_bytes_max else "unreadable")
+            self._incomplete(
+                "scan_limit" if allowed < self.policy.candidate_bytes_max else "unreadable"
+            )
             return "incomplete", None
         if _identity(after) != _identity(opened):
             self._incomplete("unreadable")
@@ -874,6 +1000,15 @@ class _StrictScanner:
             if _identity(os.fstat(self.root_fd)) != self._root_witness:
                 return False
         except OSError:
+            return False
+        try:
+            path_info = os.stat(self.policy.root, follow_symlinks=False)
+        except OSError:
+            return False
+        if (path_info.st_dev, path_info.st_ino) != (
+            self._root_witness[0],
+            self._root_witness[1],
+        ):
             return False
         for rel_dir, witness in self._dir_witnesses:
             if not rel_dir:

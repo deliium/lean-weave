@@ -10,8 +10,10 @@ from openai import OpenAI
 
 from lean_weave.code_index import CodeIndex
 from lean_weave.config import AppConfig, load_config
+from lean_weave.context.git_metadata import read_retrieval_diff
 from lean_weave.context.provider import DeterministicContextProvider
 from lean_weave.context.repository import Repository
+from lean_weave.context.retriever import ContextRetriever
 from lean_weave.contracts import (
     CodeExecutor, ContextProvider, LLMProvider, MetricsCollector,
     StateStore, VerificationRunner, WorkflowOrchestrator,
@@ -23,7 +25,7 @@ from lean_weave.metrics.jsonl import JsonlMetricsCollector
 from lean_weave.metrics.models import AttemptJournal
 from lean_weave.providers.deepseek import DeepSeekProvider
 from lean_weave.repository_map import MapLimits, RepositoryMap
-from lean_weave.verify.process import IsolationBackend
+from lean_weave.verify.process import IsolationBackend, run_bounded
 from lean_weave.verify.runner import ApprovedChecksRunner
 from lean_weave.workflow.instructions import load_instructions
 from lean_weave.workflow.orchestrator import MinimalWorkflowOrchestrator
@@ -168,6 +170,24 @@ def create_indexed_map_preview_pair(
     return repository, repository_map
 
 
+def _deterministic_context_provider(
+    context: AppContext,
+    *,
+    root: Path,
+    metadata_digests: dict[str, str] | None = None,
+    retriever_factory=None,
+) -> DeterministicContextProvider:
+    return DeterministicContextProvider(
+        root,
+        config=context.config,
+        metadata_digests=metadata_digests,
+        fact_loader_factory=lambda: create_code_index(
+            context, workspace_root=root
+        ).fact_loader(),
+        retriever_factory=retriever_factory,
+    )
+
+
 def create_context_provider(
     context: AppContext,
     *,
@@ -193,13 +213,62 @@ def create_context_provider(
         "[AppContext.context] selection=deterministic stage_prompt_tokens_max=%s",
         context.config.context.stage_prompt_tokens_max,
     )
-    return DeterministicContextProvider(
-        root,
-        config=context.config,
-        metadata_digests=metadata_digests,
-        fact_loader_factory=lambda: create_code_index(
-            context, workspace_root=root
-        ).fact_loader(),
+    return _deterministic_context_provider(
+        context, root=root, metadata_digests=metadata_digests
+    )
+
+
+def create_retrieval_provider(
+    context: AppContext,
+    *,
+    workspace_root: Path | None = None,
+    cache_base: Path | None = None,
+) -> DeterministicContextProvider:
+    """Build the concrete preview provider with lazy graph/diff retrieval wiring.
+
+    Always returns the built-in deterministic adapter for offline CLI preview.
+    Injected stage providers are not selected here.
+    """
+
+    root = Path.cwd() if workspace_root is None else Path(workspace_root)
+    try:
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        resolved_root = root
+    protected = _protected_index_paths(context, resolved_root)
+    repository_map = create_repository_map(
+        context, workspace_root=root, cache_base=cache_base
+    )
+
+    def factory() -> ContextRetriever:
+        repository = Repository(
+            root,
+            context.config.context,
+            state_dir=context.config.workflow.state_dir,
+            strict_source=True,
+            protected_paths=protected,
+        )
+
+        def load_graph(scan):
+            return repository_map.graph_for_retrieval_scan(scan)
+
+        def read_diff(diff_root, admitted_paths):
+            return read_retrieval_diff(
+                diff_root,
+                admitted_paths,
+                run_capture=run_bounded,
+            )
+
+        log.debug("[AppContext.retrieval] selection=lazy_retriever")
+        return ContextRetriever(
+            repository,
+            load_graph=load_graph,
+            read_diff=read_diff,
+        )
+
+    log.debug("[AppContext.retrieval] selection=deterministic_preview")
+    return _deterministic_context_provider(
+        context, root=root, retriever_factory=factory
     )
 
 

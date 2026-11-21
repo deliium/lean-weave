@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, Protocol
 
 from lean_weave.context.repository import Repository
 from lean_weave.logging_setup import get_logger
@@ -22,10 +23,21 @@ log = get_logger("context.git")
 
 GIT_TIMEOUT_S = 5.0
 GIT_OUTPUT_LIMIT = 4 * 1024 * 1024
+RETRIEVAL_GIT_OUTPUT_LIMIT = 1 * 1024 * 1024
 _UNSAFE_CONFIG = re.compile(
     r"^(?:filter\..+\.(?:clean|smudge|process)|diff\..+\.(?:command|textconv)|core\.fsmonitor)$",
     re.IGNORECASE,
 )
+_RETRIEVAL_DIFF_STATUSES = frozenset({"A", "M", "T"})
+
+
+class _CaptureResult(Protocol):
+    status: str
+    exit_code: int | None
+    stdout: bytes
+
+
+CaptureRunner = Callable[..., _CaptureResult]
 
 
 @dataclass
@@ -94,6 +106,25 @@ def _run_git(root: Path, args: list[str]) -> tuple[int, bytes] | None:
     return completed.returncode, completed.stdout
 
 
+def _unsafe_config_keys(output: bytes) -> bool:
+    """Return True when *output* names an unsafe repository config key."""
+
+    text = output.decode("utf-8", "replace")
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(None, 1)
+        key = parts[0]
+        value = parts[1].strip().lower() if len(parts) > 1 else ""
+        # Our own child override disables the filesystem monitor; an explicit
+        # repository value of false is equally safe.
+        if key.lower() == "core.fsmonitor" and value in {"", "false", "0", "off"}:
+            continue
+        if _UNSAFE_CONFIG.match(key):
+            return True
+    return False
+
+
 def _config_is_safe(root: Path) -> bool:
     result = _run_git(
         root,
@@ -110,20 +141,183 @@ def _config_is_safe(root: Path) -> bool:
         return True
     if code != 0:
         return False
-    text = output.decode("utf-8", "replace")
-    for line in text.splitlines():
-        if not line.strip():
+    return not _unsafe_config_keys(output)
+
+
+def _git_argv(root: Path, args: list[str]) -> list[str]:
+    return [
+        "git",
+        "-C",
+        str(root),
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        "core.preloadindex=false",
+        "-c",
+        "core.hooksPath=",
+        *args,
+    ]
+
+
+def _capture_git(
+    run_capture: CaptureRunner,
+    root: Path,
+    args: list[str],
+    *,
+    output_bytes_max: int = RETRIEVAL_GIT_OUTPUT_LIMIT,
+) -> _CaptureResult | None:
+    if not args or any("\x00" in item for item in args):
+        return None
+    try:
+        return run_capture(
+            _git_argv(root, args),
+            cwd=root,
+            env=_environment(),
+            timeout_s=GIT_TIMEOUT_S,
+            output_bytes_max=output_bytes_max,
+        )
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _parse_retrieval_name_status(data: bytes) -> set[str] | None:
+    """Parse NUL name-status pairs; return None on malformation."""
+
+    tokens = data.split(b"\x00")
+    paths: set[str] = set()
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        index += 1
+        if not token:
             continue
-        parts = line.split(None, 1)
-        key = parts[0]
-        value = parts[1].strip().lower() if len(parts) > 1 else ""
-        # Our own child override disables the filesystem monitor; an explicit
-        # repository value of false is equally safe.
-        if key.lower() == "core.fsmonitor" and value in {"", "false", "0", "off"}:
+        try:
+            status = token.decode("utf-8", "strict")
+        except UnicodeDecodeError:
+            return None
+        if not status:
             continue
-        if _UNSAFE_CONFIG.match(key):
-            return False
-    return True
+        if status[0] in {"R", "C"}:
+            # Renames are disabled; any rename record is malformed for this probe.
+            return None
+        if index >= len(tokens):
+            return None
+        try:
+            path = tokens[index].decode("utf-8", "strict")
+        except UnicodeDecodeError:
+            return None
+        index += 1
+        code = status[0]
+        if code in _RETRIEVAL_DIFF_STATUSES and path:
+            paths.add(path.replace("\\", "/"))
+        elif code in {"D", "U", "X", "B", " ", "?"}:
+            continue
+        elif code not in _RETRIEVAL_DIFF_STATUSES:
+            # Unknown status codes refuse the whole signal.
+            if code.isalpha():
+                continue
+            return None
+    return paths
+
+
+def read_retrieval_diff(
+    root: Path,
+    admitted_paths: Iterable[str],
+    *,
+    run_capture: CaptureRunner,
+) -> frozenset[str] | None:
+    """Return admitted paths with staged/unstaged A/M/T changes, or None if unusable.
+
+    Accepts only a direct ``.git`` directory at *root* (no gitfile, symlink, or
+    parent discovery). One failed or malformed probe yields ``None``.
+    """
+
+    admitted = frozenset(admitted_paths)
+    git_dir = root / ".git"
+    try:
+        info = git_dir.lstat()
+    except OSError:
+        log.debug("[Context.git.retrieval] status=absent")
+        return None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        log.debug("[Context.git.retrieval] status=unavailable reason=git_layout")
+        return None
+
+    top = _capture_git(
+        run_capture,
+        root,
+        ["rev-parse", "--show-toplevel"],
+    )
+    if top is None or top.status != "exited" or top.exit_code != 0:
+        log.debug("[Context.git.retrieval] status=unavailable reason=toplevel")
+        return None
+    try:
+        resolved = Path(top.stdout.decode("utf-8", "strict").strip()).resolve()
+        if resolved != root.resolve():
+            log.debug("[Context.git.retrieval] status=unavailable reason=not_project_root")
+            return None
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+
+    config = _capture_git(
+        run_capture,
+        root,
+        [
+            "config",
+            "--get-regexp",
+            r"^(filter\..*\.(clean|smudge|process)|diff\..*\.(command|textconv)|core\.fsmonitor)$",
+        ],
+    )
+    if config is None or config.status != "exited":
+        return None
+    if config.exit_code == 1 and not config.stdout.strip():
+        pass
+    elif config.exit_code == 0:
+        if _unsafe_config_keys(config.stdout):
+            log.debug("[Context.git.retrieval] status=unavailable reason=unsafe_config")
+            return None
+    else:
+        return None
+
+    diff_args = [
+        "diff",
+        "--name-status",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--",
+    ]
+    unstaged = _capture_git(run_capture, root, diff_args)
+    staged = _capture_git(run_capture, root, ["diff", "--cached", *diff_args[1:]])
+    if (
+        unstaged is None
+        or staged is None
+        or unstaged.status != "exited"
+        or staged.status != "exited"
+        or unstaged.exit_code not in {0, 1}
+        or staged.exit_code not in {0, 1}
+    ):
+        log.debug("[Context.git.retrieval] status=unavailable reason=diff")
+        return None
+
+    unstaged_paths = _parse_retrieval_name_status(unstaged.stdout)
+    staged_paths = _parse_retrieval_name_status(staged.stdout)
+    if unstaged_paths is None or staged_paths is None:
+        log.debug("[Context.git.retrieval] status=unavailable reason=malformed")
+        return None
+
+    changed = frozenset(
+        path for path in (unstaged_paths | staged_paths) if path in admitted
+    )
+    log.debug(
+        "[Context.git.retrieval] status=ok changed=%s admitted=%s",
+        len(changed),
+        len(admitted),
+    )
+    return changed
 
 
 def _parse_status(data: bytes) -> dict[str, str]:

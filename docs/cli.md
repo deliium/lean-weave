@@ -19,6 +19,9 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl config show [--format yaml\|json]` | Print file/default settings and `api_key_present` |
 | `wl doctor` | Check Python, package, config, state-directory writability, git and key presence |
 | `wl context search QUERY [--path PATH] [--limit N] [--symbol NAME] [--json]` | Literal snapshot search or exact symbol lookup; offline |
+| `wl context search QUERY --task-aware [--task-kind KIND] [--kind all\|file\|symbol] [--top-k N] [--json]` | Opt-in hybrid task-aware retrieval (see [context-retrieval.md](context-retrieval.md)) |
+| `wl context rank QUERY [--task-kind KIND] [--kind all\|file\|symbol] [--top-k N] [--json]` | Rank task-relevant files/definitions with scores and cost |
+| `wl context explain QUERY [--task-kind KIND] [--kind all\|file\|symbol] [--top-k N] [--json]` | Explain ranked hits with reasons, dependencies, and diagnostics |
 | `wl context build TASK [--path PATH ...] [--level map\|symbols\|ranges\|full] [--reason TEXT] [--json]` | Build a budgeted, provenance-bearing context pack |
 | `wl context inspect PATH [--symbol NAME \| --lines START:END] [--json]` | Safe file metadata or one admitted range |
 | `wl llm check` | Opt-in DeepSeek smoke test: one small fixed request plus safe usage output |
@@ -158,6 +161,11 @@ uv run wl context search "create_llm_provider" --json
 
 # Exact symbol lookup by name and optional file
 uv run wl context search helper --symbol helper --path pkg/core.py --json
+
+# Opt-in hybrid task-aware retrieval (see context-retrieval.md)
+uv run wl context search "fix login" --task-aware --json
+uv run wl context rank "fix login" --task-kind bugfix --top-k 5 --json
+uv run wl context explain "fix login" --task-kind bugfix
 
 # Default pack: compact map plus selected signatures
 uv run wl context build "wire the provider seam" --path src/lean_weave/app.py --json

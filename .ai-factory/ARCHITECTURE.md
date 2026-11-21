@@ -130,6 +130,12 @@ is lazy. Default ContextProvider behavior is unchanged; only explicit `wl map`
 and `wl context build --indexed-map` consume map rows. No LangGraph, graph
 database, or orchestrator dependency.
 
+`context/retriever.py` and `context/retrieval_ranking.py` add opt-in task-aware
+hybrid ranking over one strict text scan, with optional checked-graph and Git
+path signals injected at `app.py::create_retrieval_provider`. Stage
+`ContextProvider.build` is unchanged; only explicit `retrieve()` / CLI preview
+paths consume ranked hits.
+
 ## ADRs
 
 | ADR | Topic |

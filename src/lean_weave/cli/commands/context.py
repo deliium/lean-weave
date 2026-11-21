@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
 
 import typer
 from pydantic import ValidationError
 
-from lean_weave.app import create_indexed_map_preview_pair
+from lean_weave.app import create_indexed_map_preview_pair, create_retrieval_provider
 from lean_weave.cli.runtime import command_context
 from lean_weave.context.builder import ContextBuilder
 from lean_weave.context.models import (
@@ -20,6 +21,7 @@ from lean_weave.context.models import (
 from lean_weave.context.policy import contains_secret, is_python
 from lean_weave.context.python_index import build_python_index
 from lean_weave.context.repository import Repository
+from lean_weave.context.retrieval_models import RetrievalRequest, RetrievalResult
 from lean_weave.context.search import SearchHit, search as literal_search
 from lean_weave.errors import ForbiddenContext, InvalidContextRequest
 from lean_weave.logging_setup import get_logger
@@ -79,6 +81,133 @@ def _hit_payload(hit: SearchHit) -> dict:
     return {"path": hit.path, "line": hit.line, "column": hit.column, "text": hit.text}
 
 
+def _retrieval_hit_payload(hit) -> dict:
+    return {
+        "kind": hit.kind,
+        "path": hit.path,
+        "symbol_id": hit.symbol_id,
+        "qualified_name": hit.qualified_name,
+        "definition_start_line": hit.definition_start_line,
+        "start_line": hit.start_line,
+        "end_line": hit.end_line,
+        "source_digest": hit.source_digest,
+        "source_kind": hit.source_kind,
+        "relevance_score": hit.relevance_score,
+        "ranking_reasons": [
+            {
+                "signal": item.signal,
+                "value": item.value,
+                "weight": item.weight,
+                "weighted_points": item.weighted_points,
+            }
+            for item in hit.ranking_reasons
+        ],
+        "related_dependencies": [
+            {
+                "direction": item.direction,
+                "related_path": item.related_path,
+                "importer_path": item.importer_path,
+                "start_line": item.start_line,
+                "end_line": item.end_line,
+                "source_digest": item.source_digest,
+            }
+            for item in hit.related_dependencies
+        ],
+        "estimated_token_cost": hit.estimated_token_cost,
+    }
+
+
+def _retrieval_payload(
+    result: RetrievalResult,
+    *,
+    command: Literal["search", "rank", "explain"],
+    include_mode: bool = False,
+) -> dict:
+    payload = {
+        "command": command,
+        "task_kind": result.task_kind,
+        "kind": result.kind,
+        "top_k": result.top_k,
+        "degraded_reasons": list(result.degraded_reasons),
+        "truncated": result.truncated,
+        "hits": [_retrieval_hit_payload(hit) for hit in result.hits],
+    }
+    if include_mode:
+        payload["mode"] = "task-aware"
+    return payload
+
+
+def _run_task_aware(
+    ctx: typer.Context,
+    *,
+    command: Literal["search", "rank", "explain"],
+    query: str,
+    task_kind: str | None,
+    kind: str | None,
+    top_k: int | None,
+    json_output: bool,
+) -> None:
+    try:
+        request = RetrievalRequest(
+            query=query,
+            task_kind=task_kind or "feature",
+            kind=kind or "all",
+            top_k=top_k,
+        )
+    except (InvalidContextRequest, ValidationError, ForbiddenContext) as exc:
+        raise typer.BadParameter("Invalid retrieval request") from exc
+
+    context = command_context(ctx)
+    provider = create_retrieval_provider(context)
+    result = provider.retrieve(request)
+    payload = _retrieval_payload(
+        result, command=command, include_mode=(command == "search")
+    )
+    if command == "search":
+        human = "\n".join(
+            f"{hit.path}:{hit.start_line}-{hit.end_line} {hit.qualified_name or ''}".rstrip()
+            for hit in result.hits
+        )
+    elif command == "rank":
+        human = "\n".join(
+            f"{hit.relevance_score:4d} {hit.estimated_token_cost:4d} "
+            f"{hit.path}:{hit.start_line}-{hit.end_line} {hit.qualified_name or ''}".rstrip()
+            for hit in result.hits
+        )
+    else:
+        lines: list[str] = []
+        if result.degraded_reasons:
+            lines.append("diagnostics: " + ",".join(result.degraded_reasons))
+        if result.truncated:
+            lines.append("truncated: true")
+        for hit in result.hits:
+            lines.append(
+                f"{hit.relevance_score:4d} {hit.estimated_token_cost:4d} "
+                f"{hit.path}:{hit.start_line}-{hit.end_line} {hit.qualified_name or ''}".rstrip()
+            )
+            for reason in hit.ranking_reasons:
+                lines.append(
+                    f"  {reason.signal} value={reason.value} weight={reason.weight} "
+                    f"points={reason.weighted_points}"
+                )
+            for dep in hit.related_dependencies:
+                lines.append(
+                    f"  {dep.direction} {dep.related_path} via {dep.importer_path}:"
+                    f"{dep.start_line}-{dep.end_line}"
+                )
+        if not result.hits and not lines:
+            lines.append("diagnostics: none")
+        human = "\n".join(lines)
+    _emit(payload, json_output=json_output, human=human)
+    log.info(
+        "[CLI.context.%s] hits=%s degraded=%s truncated=%s",
+        command,
+        len(result.hits),
+        len(result.degraded_reasons),
+        result.truncated,
+    )
+
+
 @context_app.command("search")
 def search_command(
     ctx: typer.Context,
@@ -86,9 +215,33 @@ def search_command(
     path: str | None = typer.Option(None, "--path", help="Restrict to one eligible path."),
     limit: int | None = typer.Option(None, "--limit", help="Maximum hits (tightens configured cap)."),
     symbol: str | None = typer.Option(None, "--symbol", help="Exact symbol name lookup."),
+    task_aware: bool = typer.Option(False, "--task-aware", help="Opt into hybrid task retrieval."),
+    task_kind: str | None = typer.Option(None, "--task-kind", help="Retrieval task profile."),
+    kind: str | None = typer.Option(None, "--kind", help="Result kind: all|file|symbol."),
+    top_k: int | None = typer.Option(None, "--top-k", help="Maximum ranked hits."),
     json_output: bool = typer.Option(False, "--json", help="Stable JSON output."),
 ) -> None:
     """Search canonical snapshots or resolve an exact symbol name."""
+
+    if task_aware:
+        if path is not None or symbol is not None or limit is not None:
+            raise typer.BadParameter(
+                "--task-aware cannot be combined with --path, --symbol, or --limit"
+            )
+        _run_task_aware(
+            ctx,
+            command="search",
+            query=query,
+            task_kind=task_kind,
+            kind=kind,
+            top_k=top_k,
+            json_output=json_output,
+        )
+        return
+    if task_kind is not None or kind is not None or top_k is not None:
+        raise typer.BadParameter(
+            "--task-kind/--kind/--top-k require --task-aware (or use rank/explain)"
+        )
 
     context = command_context(ctx)
     repository = _repository(context)
@@ -153,6 +306,50 @@ def search_command(
     human = "\n".join(f"{hit.path}:{hit.line}:{hit.column + 1}: {hit.text}" for hit in hits)
     _emit(payload, json_output=json_output, human=human)
     log.info("[CLI.context.search] mode=literal hits=%s backend=%s", len(hits), result.backend)
+
+
+@context_app.command("rank")
+def rank_command(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Task-aware retrieval query."),
+    task_kind: str | None = typer.Option(None, "--task-kind", help="Retrieval task profile."),
+    kind: str | None = typer.Option(None, "--kind", help="Result kind: all|file|symbol."),
+    top_k: int | None = typer.Option(None, "--top-k", help="Maximum ranked hits."),
+    json_output: bool = typer.Option(False, "--json", help="Stable JSON output."),
+) -> None:
+    """Rank task-relevant files and definitions (offline, no LLM)."""
+
+    _run_task_aware(
+        ctx,
+        command="rank",
+        query=query,
+        task_kind=task_kind,
+        kind=kind,
+        top_k=top_k,
+        json_output=json_output,
+    )
+
+
+@context_app.command("explain")
+def explain_command(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Task-aware retrieval query."),
+    task_kind: str | None = typer.Option(None, "--task-kind", help="Retrieval task profile."),
+    kind: str | None = typer.Option(None, "--kind", help="Result kind: all|file|symbol."),
+    top_k: int | None = typer.Option(None, "--top-k", help="Maximum ranked hits."),
+    json_output: bool = typer.Option(False, "--json", help="Stable JSON output."),
+) -> None:
+    """Explain ranked retrieval hits with reasons and diagnostics."""
+
+    _run_task_aware(
+        ctx,
+        command="explain",
+        query=query,
+        task_kind=task_kind,
+        kind=kind,
+        top_k=top_k,
+        json_output=json_output,
+    )
 
 
 def _parse_lines(value: str) -> tuple[int, int]:

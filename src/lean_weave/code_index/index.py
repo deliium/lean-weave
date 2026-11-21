@@ -35,7 +35,7 @@ from lean_weave.code_index.models import (
 )
 from lean_weave.code_index.sqlite_store import SqliteIndexStore
 from lean_weave.config.models import ContextConfig
-from lean_weave.context.policy import contains_secret
+from lean_weave.context.policy import contains_secret, is_python
 from lean_weave.context.python_index import (
     PythonFacts,
     extract_python_facts,
@@ -45,6 +45,7 @@ from lean_weave.context.python_index import (
 from lean_weave.context.repository import (
     FileSnapshot,
     Repository,
+    SourceScan,
     validate_index_source_path,
 )
 from lean_weave.errors import CodeIndexError, ForbiddenContext, InvalidContextRequest
@@ -473,6 +474,29 @@ class CodeIndex:
     # ------------------------------------------------------------------
     # Checked generation (shared by lookup and whole-corpus reads)
     # ------------------------------------------------------------------
+    def _healthy_store(
+        self, store: SqliteIndexStore
+    ) -> tuple[object, tuple[FileRecord, ...]]:
+        health, header, records = store.inspect()
+        if health is not StoreHealth.HEALTHY or header is None:
+            raise CodeIndexError(
+                "missing" if health is StoreHealth.MISSING else health.value
+            )
+        return header, records
+
+    def _verify_header_revision(
+        self,
+        header,
+        *,
+        policy: str,
+        revision: str,
+        policy_mismatch: str = "stale",
+    ) -> None:
+        if header.policy_key != policy or header.extractor_key != extractor_key():
+            raise CodeIndexError(policy_mismatch)
+        if revision != header.revision:
+            raise CodeIndexError("stale")
+
     @contextlib.contextmanager
     def _checked_generation(self) -> Iterator[IndexGeneration]:
         """Yield one healthy, live-verified generation; revalidate on normal exit."""
@@ -481,11 +505,7 @@ class CodeIndex:
         repository = self._repository()
         with _read_lease(location):
             store = SqliteIndexStore(location)
-            health, header, records = store.inspect()
-            if health is not StoreHealth.HEALTHY or header is None:
-                raise CodeIndexError(
-                    "missing" if health is StoreHealth.MISSING else health.value
-                )
+            header, records = self._healthy_store(store)
             with repository.scan_python_sources() as scan:
                 if not scan.complete:
                     raise CodeIndexError("incomplete")
@@ -493,12 +513,7 @@ class CodeIndex:
                 revision = source_revision(
                     policy, {item.path: item.digest for item in scan.snapshots}
                 )
-                if (
-                    header.policy_key != policy
-                    or header.extractor_key != extractor_key()
-                    or revision != header.revision
-                ):
-                    raise CodeIndexError("stale")
+                self._verify_header_revision(header, policy=policy, revision=revision)
                 generation = IndexGeneration(header=header, records=records)
                 log.debug(
                     "[CodeIndex._checked_generation] yield files=%s revision=%s",
@@ -520,6 +535,69 @@ class CodeIndex:
             result.header.revision,
         )
         return result
+
+    def read_generation_for_retrieval_scan(self, scan: SourceScan) -> IndexGeneration:
+        """Return a checked generation matching an already admitted retrieval scan.
+
+        Reuses the caller's complete scan; does not open a second Python walk or
+        parse sources. Incomplete, detached, or policy-mismatched scans fail
+        before the index lease is acquired.
+        """
+
+        if not scan.complete:
+            raise CodeIndexError("incomplete")
+        if scan._session is None or scan._session.root_fd < 0:
+            raise CodeIndexError("invalid_request")
+        repository = self._repository()
+        if not scan.matches_retrieval_policy(repository):
+            raise CodeIndexError("invalid_request")
+        if not scan.revalidate():
+            raise CodeIndexError("storage_unavailable")
+
+        python_snapshots = tuple(
+            item for item in scan.snapshots if is_python(item.path)
+        )
+        policy = policy_key(
+            state_path=scan.policy.state_dir,
+            protected_paths=scan.policy.protected_paths,
+            exclusions=scan.policy.exclusions,
+            candidate_bytes_max=scan.policy.candidate_bytes_max,
+        )
+        revision = source_revision(
+            policy, {item.path: item.digest for item in python_snapshots}
+        )
+        location = self._location()
+        with _read_lease(location):
+            store = SqliteIndexStore(location)
+            header, records = self._healthy_store(store)
+            if header.checkout_key != location.checkout_key:
+                raise CodeIndexError("invalid_request")
+            self._verify_header_revision(
+                header,
+                policy=policy,
+                revision=revision,
+                policy_mismatch="incompatible",
+            )
+            by_path = {item.path: item for item in python_snapshots}
+            if len(records) != len(by_path):
+                raise CodeIndexError("stale")
+            for record in records:
+                snapshot = by_path.get(record.path)
+                if (
+                    snapshot is None
+                    or snapshot.digest != record.digest
+                    or snapshot.lines != record.line_count
+                ):
+                    raise CodeIndexError("stale")
+            if not scan.revalidate():
+                raise CodeIndexError("storage_unavailable")
+            generation = IndexGeneration(header=header, records=records)
+            log.debug(
+                "[CodeIndex.read_generation_for_retrieval_scan] outcome=ok files=%s revision=%s",
+                len(records),
+                header.revision,
+            )
+            return generation
 
     # ------------------------------------------------------------------
     # Lookup

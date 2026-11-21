@@ -1,0 +1,77 @@
+[
+  {
+    "id": "bug_fix_add",
+    "repository": "bug_fix",
+    "split": "development",
+    "task_kind": "bugfix",
+    "query": "fix add returns wrong result",
+    "relevant_paths": ["src/calc.py"],
+    "symbols": [
+      {"path": "src/calc.py", "qualified_name": "calc.add", "start_line": 1}
+    ]
+  },
+  {
+    "id": "multi_file_banner",
+    "repository": "multi_file_feature",
+    "split": "development",
+    "task_kind": "feature",
+    "query": "banner VERSION config",
+    "relevant_paths": ["src/config.py", "src/app.py"],
+    "symbols": [
+      {"path": "src/app.py", "qualified_name": "app.banner", "start_line": 4}
+    ]
+  },
+  {
+    "id": "dev_auth_login",
+    "repository": "dev_auth",
+    "split": "development",
+    "task_kind": "bugfix",
+    "query": "login session",
+    "relevant_paths": ["auth/session.py", "auth/routes.py"],
+    "symbols": [
+      {"path": "auth/session.py", "qualified_name": "auth.session.login", "start_line": 1}
+    ]
+  },
+  {
+    "id": "dev_auth_refactor_importer",
+    "repository": "dev_auth",
+    "split": "development",
+    "task_kind": "refactor",
+    "query": "login",
+    "relevant_paths": ["auth/session.py", "auth/routes.py"]
+  },
+  {
+    "id": "dev_auth_test",
+    "repository": "dev_auth",
+    "split": "development",
+    "task_kind": "test",
+    "query": "login",
+    "relevant_paths": ["auth/session.py", "tests/test_session.py"]
+  },
+  {
+    "id": "holdout_invoice",
+    "repository": "holdout_billing",
+    "split": "holdout",
+    "task_kind": "feature",
+    "query": "render_invoice total",
+    "relevant_paths": ["pkg/invoice.py", "pkg/client.py", "notes.md"],
+    "symbols": [
+      {
+        "path": "pkg/invoice.py",
+        "qualified_name": "pkg.invoice.render_invoice",
+        "start_line": 6
+      }
+    ]
+  },
+  {
+    "id": "holdout_diagnose",
+    "repository": "holdout_billing",
+    "split": "holdout",
+    "task_kind": "diagnose",
+    "query": "render_invoice",
+    "relevant_paths": ["pkg/invoice.py"],
+    "expected_ranges": [
+      {"path": "pkg/invoice.py", "start_line": 6, "end_line": 7}
+    ]
+  }
+]

@@ -22,7 +22,7 @@ from lean_weave.logging_setup import get_logger
 log = get_logger("context.ranking")
 
 _TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_STOPWORDS = frozenset(
+STOPWORDS = frozenset(
     {
         "a",
         "an",
@@ -54,6 +54,13 @@ _STOPWORDS = frozenset(
         "using",
     }
 )
+_STOPWORDS = STOPWORDS
+
+
+def is_stopword(term: str) -> bool:
+    """Return True when *term* is a V1 ranking stopword (case-insensitive)."""
+
+    return term.lower() in STOPWORDS
 _NEUTRAL_RECENCY = 1 << 30
 _MAX_TERMS = 64
 

@@ -7,12 +7,13 @@ from pathlib import PurePosixPath
 
 from lean_weave.code_index import CodeIndex
 from lean_weave.context.policy import contains_secret, safe_root
-from lean_weave.context.repository import Repository
+from lean_weave.context.repository import Repository, SourceScan
 from lean_weave.errors import ForbiddenContext, RepositoryMapError
 from lean_weave.logging_setup import get_logger
 from lean_weave.repository_map.graph import refresh_graph
 from lean_weave.repository_map.models import (
     DependencyGraph,
+    ImportRelation,
     MapLimits,
     MapResult,
     MapSymbol,
@@ -80,6 +81,121 @@ class RepositoryMap:
         generation = self._index.read_generation()
         self._graph = refresh_graph(self._graph, generation)
         return self._graph
+
+    def _copy_graph(self, graph: DependencyGraph) -> DependencyGraph:
+        """Return a defensive projection that shares immutable node/edge tuples."""
+
+        return DependencyGraph(
+            contract_version=graph.contract_version,
+            checkout_key=graph.checkout_key,
+            policy_key=graph.policy_key,
+            extractor_key=graph.extractor_key,
+            schema_version=graph.schema_version,
+            revision=graph.revision,
+            manifest_sha256=graph.manifest_sha256,
+            nodes=graph.nodes,
+            symbols=graph.symbols,
+            relations=graph.relations,
+            forward=dict(graph.forward),
+            reverse=dict(graph.reverse),
+            symbol_references=dict(graph.symbol_references),
+            neighbors=dict(graph.neighbors),
+        )
+
+    def _filter_retrieval_graph(
+        self, graph: DependencyGraph, scan: SourceScan
+    ) -> DependencyGraph:
+        """Keep only resolved, digest-verified, non-self relations for retrieval."""
+
+        digests = {item.path: item.digest for item in scan.snapshots}
+        nodes_by_id = {node.file_id: node for node in graph.nodes}
+        kept: list[ImportRelation] = []
+        for relation in graph.relations:
+            if relation.status != "resolved" or relation.target_id is None:
+                continue
+            if relation.target_id == relation.importer_id:
+                continue
+            importer = nodes_by_id.get(relation.importer_id)
+            target = nodes_by_id.get(relation.target_id)
+            if importer is None or target is None:
+                continue
+            if digests.get(importer.path) != importer.digest:
+                continue
+            if digests.get(target.path) != target.digest:
+                continue
+            if relation.source.digest != importer.digest:
+                continue
+            kept.append(relation)
+
+        forward: dict[str, list[str]] = {node.file_id: [] for node in graph.nodes}
+        reverse: dict[str, list[str]] = {node.file_id: [] for node in graph.nodes}
+        neighbor_sets: dict[str, set[str]] = {
+            node.file_id: set() for node in graph.nodes
+        }
+        symbol_refs: dict[str, list[ImportRelation]] = {}
+        for relation in kept:
+            assert relation.target_id is not None
+            forward[relation.importer_id].append(relation.target_id)
+            reverse[relation.target_id].append(relation.importer_id)
+            neighbor_sets[relation.importer_id].add(relation.target_id)
+            neighbor_sets[relation.target_id].add(relation.importer_id)
+            if relation.symbol_id is not None:
+                symbol_refs.setdefault(relation.symbol_id, []).append(relation)
+
+        def unique_ordered(ids: list[str]) -> tuple[str, ...]:
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for file_id in ids:
+                if file_id in seen:
+                    continue
+                seen.add(file_id)
+                ordered.append(file_id)
+            return tuple(ordered)
+
+        return DependencyGraph(
+            contract_version=graph.contract_version,
+            checkout_key=graph.checkout_key,
+            policy_key=graph.policy_key,
+            extractor_key=graph.extractor_key,
+            schema_version=graph.schema_version,
+            revision=graph.revision,
+            manifest_sha256=graph.manifest_sha256,
+            nodes=graph.nodes,
+            symbols=graph.symbols,
+            relations=tuple(kept),
+            forward={
+                file_id: unique_ordered(values) for file_id, values in forward.items()
+            },
+            reverse={
+                file_id: unique_ordered(values) for file_id, values in reverse.items()
+            },
+            symbol_references={
+                symbol_id: tuple(items) for symbol_id, items in sorted(symbol_refs.items())
+            },
+            neighbors={
+                file_id: tuple(
+                    sorted(
+                        neighbors,
+                        key=lambda item: nodes_by_id[item].path,
+                    )
+                )
+                for file_id, neighbors in neighbor_sets.items()
+            },
+        )
+
+    def graph_for_retrieval_scan(self, scan: SourceScan) -> DependencyGraph:
+        """Build a defensive graph projection from one admitted retrieval scan."""
+
+        generation = self._index.read_generation_for_retrieval_scan(scan)
+        self._graph = refresh_graph(self._graph, generation)
+        projected = self._filter_retrieval_graph(self._graph, scan)
+        log.debug(
+            "[RepositoryMap.retrieval_graph] nodes=%s symbols=%s relations=%s",
+            len(projected.nodes),
+            len(projected.symbols),
+            len(projected.relations),
+        )
+        return self._copy_graph(projected)
 
     def show(self) -> MapResult:
         graph = self._load()
