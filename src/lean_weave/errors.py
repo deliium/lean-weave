@@ -70,6 +70,39 @@ class ContextBudgetError(ContextError):
     """The required prompt envelope exceeds the configured stage budget."""
 
 
+_CODE_INDEX_CODES = frozenset(
+    {
+        "root_unavailable",
+        "unsafe_cache",
+        "storage_unavailable",
+        "busy",
+        "missing",
+        "incompatible",
+        "corrupt",
+        "recovery_required",
+        "incomplete",
+        "capacity_exceeded",
+        "unsafe_facts",
+        "publication_uncertain",
+        "clear_incomplete",
+        "invalid_request",
+        "stale",
+        "unknown",
+    }
+)
+
+
+class CodeIndexError(LeanWeaveError):
+    """Safe persistent-index failure. Messages carry only a stable code."""
+
+    def __init__(self, code: str) -> None:
+        if code not in _CODE_INDEX_CODES:
+            code = "storage_unavailable"
+        self.code = code
+        super().__init__(code)
+
+
+
 class StateError(LeanWeaveError):
     """Durable workflow state is unreadable, conflicting, or unwritable."""
 

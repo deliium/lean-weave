@@ -27,6 +27,7 @@ uv run wl config show
 uv run wl doctor
 uv run wl feature --help
 uv run wl context --help
+uv run wl index --help
 ```
 
 `init` prints the new `.lean-weave/config.yaml` path; running it again refuses
@@ -49,6 +50,26 @@ adds complete AST spans; `--level full` requires exactly one path and a
 `--reason`. Every excerpt includes its path, original line range, and snapshot
 digest. Budgets and exclusions are configured under `context` in
 `.lean-weave/config.yaml`.
+
+## Persistent code index (optional, offline)
+
+The index is a disposable local cache of Python facts. It is never required:
+without it, context builds use the normal AST parser.
+
+```bash
+uv run wl index build
+uv run wl index status
+# after editing or switching branches:
+uv run wl index update
+# recovery when status reports corrupt/incompatible/recovery_required:
+uv run wl index clear --yes
+uv run wl index build
+```
+
+The cache lives under `${XDG_CACHE_HOME:-~/.cache}/lean-weave/code-index/` and
+is isolated per checkout. It makes no LLM calls and is never written into the
+repository. See [Code index](code-index.md) for freshness, stable identifiers,
+limits, platform behavior, and recovery.
 
 ## Feature workflow (worktree + CLI)
 

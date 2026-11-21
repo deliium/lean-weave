@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -29,7 +31,11 @@ from benchmarks.offline import (
     tool_completion,
     worktree_for,
 )
+import lean_weave.context.provider as context_provider_module
+from lean_weave.code_index import CodeIndex
+from lean_weave.code_index.sqlite_store import SqliteIndexStore
 from lean_weave.config import init_config
+from lean_weave.context.provider import DeterministicContextProvider
 
 
 def _snapshot_origin(origin: Path) -> dict[str, object]:
@@ -296,3 +302,129 @@ def test_intended_edit_still_satisfies_oracle_outside_cli(tmp_path: Path):
     case = prepare_case("test_repair", tmp_path)
     apply_intended_edit(case.manifest.id, case.origin)
     assert all(item.ok for item in run_all_oracles(case.manifest, case.origin))
+
+
+def _capture_provider_bundles(monkeypatch):
+    captured: dict[tuple[str, str], dict[str, object]] = {}
+    original = DeterministicContextProvider.build
+
+    def wrapped(self, stage, feature_state):
+        bundle = original(self, stage, feature_state)
+        captured[(str(self.root), stage)] = {
+            "messages": bundle["messages"],
+            "tokens": bundle["estimated_tokens"],
+            "paths": tuple(bundle["pack"].relevant_paths),
+            "size": len(bundle["user_prompt"]),
+        }
+        return bundle
+
+    monkeypatch.setattr(DeterministicContextProvider, "build", wrapped)
+    return captured
+
+
+def _run_review_resume(case, monkeypatch, *, warm: bool, cache: Path):
+    plan_transport = ScriptedTransport(review_plan_only_script(case.manifest))
+    install_gateway_transport(monkeypatch, plan_transport)
+    bind_feature_session(monkeypatch, case.origin)
+    paused = invoke_cli(
+        "--config", str(case.config_path), "feature", case.manifest.request, "--review"
+    )
+    assert paused.exit_code == 0, paused.stdout + paused.stderr
+    view = parse_view(paused.stdout)
+    assert view["reason"] == "review_pending"
+    worktree = worktree_for(case.origin, view["feature_id"])
+
+    if warm:
+        previous = os.getcwd()
+        os.chdir(worktree)
+        try:
+            built = invoke_cli(
+                "--config",
+                str(case.config_path),
+                "index",
+                "build",
+                env={"XDG_CACHE_HOME": str(cache)},
+            )
+        finally:
+            os.chdir(previous)
+        assert built.exit_code == 0, built.stdout + built.stderr
+        assert plan_transport.send_count == 1
+        assert CodeIndex(case.origin, cache_base=cache).status().health.value == "missing"
+
+    shadow = ContentShadow.from_tree(worktree)
+    edits = {"src/greeter.py": 'def greet(name):\n    return f"Hello, {name}"\n'}
+    continue_transport = ScriptedTransport(
+        [
+            tool_completion(shadow, "src/greeter.py", edits["src/greeter.py"]),
+            final_completion("done"),
+        ]
+    )
+    install_gateway_transport(monkeypatch, continue_transport)
+    token = approval_token(paused.stdout)
+    done = invoke_cli(
+        "--config",
+        str(case.config_path),
+        "resume",
+        view["feature_id"],
+        "--approve",
+        token,
+        env={"XDG_CACHE_HOME": str(cache)} if warm else None,
+    )
+    assert done.exit_code == 0, done.stdout + done.stderr
+    assert parse_view(done.stdout)["status"] == "success"
+    assert continue_transport.send_count == 2
+    assert "Hello" in (worktree / "src" / "greeter.py").read_text(encoding="utf-8")
+    return worktree
+
+
+def test_review_resume_warm_index_matches_cold_prompt(tmp_path: Path, monkeypatch):
+    cold_case = prepare_case("single_file_feature", tmp_path / "cold")
+    warm_case = prepare_case("single_file_feature", tmp_path / "warm")
+    warm_cache = tmp_path / "warm-cache"
+    warm_cache.mkdir(mode=0o700)
+    os.chmod(warm_cache, 0o700)
+
+    captured = _capture_provider_bundles(monkeypatch)
+    scoped_reads: list[tuple[str, bool]] = []
+    extraction_calls: list[str] = []
+    original_session = SqliteIndexStore.scoped_session
+    original_extract = context_provider_module.extract_python_facts
+
+    @contextmanager
+    def recording_session(self, **kwargs):
+        with original_session(self, **kwargs) as loader:
+            def wrapped(path, digest, line_count):
+                record = loader(path, digest, line_count)
+                scoped_reads.append((path, record is not None))
+                return record
+
+            yield wrapped
+
+    def recording_extract(snapshot):
+        extraction_calls.append(snapshot.path)
+        return original_extract(snapshot)
+
+    monkeypatch.setattr(SqliteIndexStore, "scoped_session", recording_session)
+    monkeypatch.setattr(context_provider_module, "extract_python_facts", recording_extract)
+
+    cold_worktree = _run_review_resume(cold_case, monkeypatch, warm=False, cache=warm_cache)
+    cold_scoped = list(scoped_reads)
+    cold_extracted = list(extraction_calls)
+    scoped_reads.clear()
+    extraction_calls.clear()
+
+    warm_worktree = _run_review_resume(warm_case, monkeypatch, warm=True, cache=warm_cache)
+    warm_scoped = list(scoped_reads)
+    warm_extracted = list(extraction_calls)
+
+    assert CodeIndex(cold_case.origin, cache_base=warm_cache).status().health.value == "missing"
+    assert CodeIndex(warm_case.origin, cache_base=warm_cache).status().health.value == "missing"
+    assert any(path == "src/greeter.py" and hit for path, hit in warm_scoped)
+    assert "src/greeter.py" not in warm_extracted
+    assert "src/greeter.py" in cold_extracted
+
+    cold_implement = captured[(str(cold_worktree), "implement")]
+    warm_implement = captured[(str(warm_worktree), "implement")]
+    assert warm_implement["messages"] == cold_implement["messages"]
+    assert warm_implement["paths"] == cold_implement["paths"]
+    assert warm_implement["size"] == cold_implement["size"]

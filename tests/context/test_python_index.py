@@ -2,9 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from lean_weave.context.models import SymbolKind
-from lean_weave.context.python_index import build_python_index
-from lean_weave.context.repository import Repository
+from lean_weave.context.models import SymbolKind, content_digest
+from lean_weave.context.python_index import (
+    build_python_index,
+    extract_python_facts,
+    project_python_facts,
+)
+from lean_weave.context.repository import FileSnapshot, Repository
 
 from .conftest import write_files
 
@@ -128,3 +132,88 @@ def test_relative_import_without_package_is_ignored(project: Path):
     write_files(project, {"loose.py": "from . import missing\n"})
     index = build_python_index(Repository(project))
     assert index.import_edges["loose.py"] == ()
+
+
+def _snapshot(path: str, text: str) -> FileSnapshot:
+    return FileSnapshot(path, text, content_digest(text), len(text.encode("utf-8")))
+
+
+def test_facts_capture_decorators_signatures_and_occurrences():
+    text = (
+        "@one\n"
+        "@two(arg=1)\n"
+        "class C:\n"
+        "    @staticmethod\n"
+        "    async def run(self, a, /, b, *, c=1) -> int:\n"
+        "        return 1\n"
+        "\n"
+        "def same():\n"
+        "    return 1\n"
+        "def same():\n"
+        "    return 2\n"
+    )
+    facts = extract_python_facts(_snapshot("pkg/a.py", text))
+    assert facts.status == "ok"
+    assert facts.definitions[0].decorators == ("one", "two(arg=1)")
+    assert facts.definitions[0].kind == SymbolKind.CLASS
+    assert facts.definitions[0].start_line == 1
+    run = next(item for item in facts.definitions if item.simple_name == "run")
+    assert run.kind == SymbolKind.ASYNC_METHOD
+    assert run.start_line == 4
+    assert run.end_line == 6
+    assert "/" in run.signature and "*" in run.signature and "-> int" in run.signature
+    duplicates = [item for item in facts.definitions if item.simple_name == "same"]
+    assert [item.occurrence for item in duplicates] == [0, 1]
+    assert all(item.local_name == "same" for item in duplicates)
+
+
+def test_facts_support_unicode_empty_and_pyi():
+    facts = extract_python_facts(_snapshot("pkg/é.py", "def café(значение):\n    return значение\n"))
+    assert facts.definitions[0].simple_name == "café"
+    stub = extract_python_facts(_snapshot("pkg/api.pyi", "def declared(x: int) -> str: ...\n"))
+    assert stub.status == "ok"
+    assert stub.definitions[0].signature == "def declared(x: int) -> str"
+    empty = extract_python_facts(_snapshot("pkg/empty.py", ""))
+    assert empty.status == "ok"
+    assert empty.line_count == 0
+
+
+def test_failed_facts_have_no_definitions_or_imports():
+    facts = extract_python_facts(_snapshot("pkg/broken.py", "import x\ndef broken(:\n"))
+    assert facts.status == "syntax"
+    assert facts.definitions == ()
+    assert facts.imports == ()
+
+
+def test_imports_are_statement_records():
+    facts = extract_python_facts(
+        _snapshot("pkg/a.py", "import a, b as bee\nfrom . import c\nfrom .d import e as f\nfrom .d import *\n")
+    )
+    assert [item.kind for item in facts.imports] == ["import", "from", "from", "from"]
+    assert facts.imports[0].names == (("a", None), ("b", "bee"))
+    assert facts.imports[1].level == 1
+    assert facts.imports[2].names == (("e", "f"),)
+    assert facts.imports[3].names == (("*", None),)
+
+
+def test_move_projection_uses_new_path_and_module():
+    facts = extract_python_facts(_snapshot("pkg/a.py", "def f():\n    return 1\n"))
+    moved = project_python_facts("other/b.py", facts)
+    assert moved.path == "other/b.py"
+    assert moved.module == "other.b"
+    assert moved.symbols[0].qualified_name == "other.b.f"
+    assert facts.definitions[0].local_name == "f"
+
+
+def test_load_facts_callback_reuses_one_parse(project: Path):
+    write_files(project, {"a.py": "def f():\n    return 1\n"})
+    repository = Repository(project)
+    calls: list[str] = []
+
+    def load(snapshot):
+        calls.append(snapshot.path)
+        return extract_python_facts(snapshot)
+
+    index = build_python_index(repository, load_facts=load)
+    assert calls == ["a.py"]
+    assert index.lookup("f")

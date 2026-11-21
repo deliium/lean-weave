@@ -9,8 +9,9 @@ tests. Nothing here mutates state, calls an LLM, or writes a journal.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Callable, ContextManager, Iterable, Mapping
 
 from lean_weave.config.models import AppConfig, ContextConfig
 from lean_weave.context.builder import BuildResult, ContextBuilder, build_metadata_context
@@ -23,10 +24,15 @@ from lean_weave.context.models import (
     validate_text,
 )
 from lean_weave.context.policy import contains_secret, is_python
-from lean_weave.context.python_index import build_python_index
+from lean_weave.context.python_index import (
+    PythonFacts,
+    build_python_index,
+    extract_python_facts,
+    extractor_key,
+)
 from lean_weave.context.ranking import matching_tests
-from lean_weave.context.repository import Repository
-from lean_weave.errors import ForbiddenContext, InvalidContextRequest
+from lean_weave.context.repository import FileSnapshot, Repository
+from lean_weave.errors import CodeIndexError, ForbiddenContext, InvalidContextRequest
 from lean_weave.logging_setup import get_logger
 from lean_weave.schemas import FeatureState, ImplementationTask
 
@@ -73,6 +79,7 @@ class DeterministicContextProvider:
         context_config: ContextConfig | None = None,
         state_dir: str = ".lean-weave",
         metadata_digests: Mapping[str, str] | None = None,
+        fact_loader_factory: Callable[[], ContextManager[Callable[[FileSnapshot], PythonFacts]]] | None = None,
     ) -> None:
         self.root = (root if root is not None else Path.cwd()).resolve()
         self.config = config
@@ -87,12 +94,57 @@ class DeterministicContextProvider:
             for key, value in (metadata_digests or {}).items()
             if key in _ALLOWED_METADATA_KEYS and isinstance(value, str) and value
         }
+        self.fact_loader_factory = fact_loader_factory
 
     # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------
     def _repository(self) -> Repository:
         return Repository(self.root, self.context_config, state_dir=self.state_dir)
+
+    @contextmanager
+    def _facts_session(self):
+        """Open at most one scoped persistent-facts session for one stage build."""
+
+        if self.fact_loader_factory is None:
+            yield None
+            return
+        try:
+            context = self.fact_loader_factory()
+            loader = context.__enter__()
+        except CodeIndexError:
+            log.debug("[Context.facts] outcome=unavailable")
+            yield None
+            return
+        try:
+            yield loader
+        finally:
+            context.__exit__(None, None, None)
+
+    def _safe_loader(self, loader):
+        disabled = False
+        memo: dict[tuple[str, str, str], PythonFacts] = {}
+        extractor = extractor_key()
+
+        def load(snapshot: FileSnapshot) -> PythonFacts:
+            nonlocal disabled
+            key = (snapshot.path, snapshot.digest, extractor)
+            cached = memo.get(key)
+            if cached is not None:
+                return cached
+            facts = None
+            if not disabled:
+                try:
+                    facts = loader(snapshot)
+                except CodeIndexError:
+                    disabled = True
+                    log.warning("[Context.facts] persistent reads disabled for this build")
+            if facts is None:
+                facts = extract_python_facts(snapshot)
+            memo[key] = facts
+            return facts
+
+        return load
 
     def _constraints(self, stage: str) -> list[str]:
         return [*_COMMON_CONSTRAINTS, *_STAGE_CONSTRAINTS[stage]]
@@ -207,11 +259,14 @@ class DeterministicContextProvider:
         task_paths: Iterable[str],
         emit_paths: Iterable[str] | None = None,
         include_tests: bool = False,
+        load_facts=None,
     ):
         eligible = set(repository.inventory().files)
         task_scope = [path for path in dict.fromkeys(task_paths) if path in eligible]
         first = build_python_index(
-            repository, paths=[path for path in task_scope if is_python(path)]
+            repository,
+            paths=[path for path in task_scope if is_python(path)],
+            load_facts=load_facts,
         )
         targets = first.one_hop([path for path in task_scope if is_python(path)])
         tests = matching_tests(eligible, task_scope) if include_tests else []
@@ -220,7 +275,9 @@ class DeterministicContextProvider:
         else:
             scope = sorted({path for path in emit_paths if path in eligible})
         index = build_python_index(
-            repository, paths=[path for path in scope if is_python(path)]
+            repository,
+            paths=[path for path in scope if is_python(path)],
+            load_facts=load_facts,
         )
         return index, scope, task_scope
 
@@ -230,11 +287,14 @@ class DeterministicContextProvider:
         eligible = set(repository.inventory().files)
         task_paths = list(task.files)
         allowed = [path for path in dict.fromkeys(task_paths) if path in eligible]
-        index, scope, _ = self._targeted_index(
-            repository,
-            task_paths=task_paths,
-            include_tests=plan.settings.get("testing") is True,
-        )
+        with self._facts_session() as raw_loader:
+            loader = None if raw_loader is None else self._safe_loader(raw_loader)
+            index, scope, _ = self._targeted_index(
+                repository,
+                task_paths=task_paths,
+                include_tests=plan.settings.get("testing") is True,
+                load_facts=loader,
+            )
         if not allowed:
             result = build_metadata_context(
                 task=task.description or task.title,
@@ -322,9 +382,14 @@ class DeterministicContextProvider:
                 affected.append(path)
         task_python = [path for path in task.files if path in eligible and is_python(path)]
         # Read approved task sources only to resolve imports; emit affected only.
-        index, scope, _ = self._targeted_index(
-            repository, task_paths=task_python, emit_paths=affected
-        )
+        with self._facts_session() as raw_loader:
+            loader = None if raw_loader is None else self._safe_loader(raw_loader)
+            index, scope, _ = self._targeted_index(
+                repository,
+                task_paths=task_python,
+                emit_paths=affected,
+                load_facts=loader,
+            )
         failure = self._bounded(
             json.dumps(
                 {

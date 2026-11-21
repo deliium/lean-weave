@@ -110,6 +110,19 @@ directory, and `WorktreeManager` lifecycle (create / adopt / inspect /
 cleanup). Managed worktrees live in an owner-only sibling parent outside the
 source checkout. Routing never stores plans or budgets.
 
+`code_index/` is the optional V2 persistent index. `identity.py` binds a cache
+namespace to the resolved checkout path, device, and inode and validates an
+owner-only external cache; `models.py` owns canonical facts serialization,
+source revisions, policy/extractor keys, and stable identifiers;
+`sqlite_store.py` validates the schema, integrity, manifest checksum, scoped
+reads, and transactional writes; `index.py` performs strict admission,
+incremental reconciliation, checked freshness/lookup, scoped provider loads,
+and clear. The cache is disposable, contains no source bodies or Git
+metadata, and is never consulted for membership, ranking, or prompt
+authority. `app.py::create_code_index` is the lazy wiring seam; no cache path,
+directory, or database is opened for help, provider construction, plan, or
+verify.
+
 ## ADRs
 
 | ADR | Topic |

@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from lean_weave.app import AppContext, build_app_context, create_context_provider
+import lean_weave.context.provider as provider_module
+from lean_weave.code_index import CodeIndex
 from lean_weave.config import AppConfig
 from lean_weave.context.provider import DeterministicContextProvider
 from lean_weave.context.repository import Repository
@@ -248,3 +250,67 @@ def test_build_app_context_does_not_scan(monkeypatch, tmp_path):
     )
     context = build_app_context()
     assert context.config.context.stage_prompt_tokens_max == 6000
+
+
+def test_warm_cache_matches_cold_prompt_and_skips_extraction(
+    provider_project: Path, tmp_path: Path, monkeypatch
+):
+    cold = DeterministicContextProvider(provider_project)
+    state = _state(Stage.IMPLEMENT)
+    cold_bundle = cold.build("implement", state)
+
+    cache = tmp_path.parent / f"{tmp_path.name}-cache"
+    cache.mkdir(mode=0o700)
+    CodeIndex(provider_project, cache_base=cache).build()
+    calls: list[str] = []
+    original = provider_module.extract_python_facts
+
+    def recording(snapshot):
+        calls.append(snapshot.path)
+        return original(snapshot)
+
+    monkeypatch.setattr(provider_module, "extract_python_facts", recording)
+    warm = DeterministicContextProvider(
+        provider_project,
+        fact_loader_factory=lambda: CodeIndex(
+            provider_project, cache_base=cache
+        ).fact_loader(),
+    )
+    warm_bundle = warm.build("implement", state)
+    assert warm_bundle["messages"] == cold_bundle["messages"]
+    assert warm_bundle["pack"].relevant_paths == cold_bundle["pack"].relevant_paths
+    assert calls == []
+
+
+def test_changed_source_falls_back_and_reparses(
+    provider_project: Path, tmp_path: Path, monkeypatch
+):
+    cache = tmp_path.parent / f"{tmp_path.name}-cache"
+    cache.mkdir(mode=0o700)
+    CodeIndex(provider_project, cache_base=cache).build()
+    (provider_project / "pkg" / "a.py").write_text("from .b import b\n\ndef a():\n    return b() + 1\n")
+    calls: list[str] = []
+    original = provider_module.extract_python_facts
+
+    def recording(snapshot):
+        calls.append(snapshot.path)
+        return original(snapshot)
+
+    monkeypatch.setattr(provider_module, "extract_python_facts", recording)
+    provider = DeterministicContextProvider(
+        provider_project,
+        fact_loader_factory=lambda: CodeIndex(
+            provider_project, cache_base=cache
+        ).fact_loader(),
+    )
+    provider.build("implement", _state(Stage.IMPLEMENT))
+    assert "pkg/a.py" in calls
+
+
+def test_cache_is_never_opened_for_plan_or_verify(provider_project: Path):
+    def factory():
+        raise AssertionError("plan/verify must not open the cache")
+
+    provider = DeterministicContextProvider(provider_project, fact_loader_factory=factory)
+    provider.build("plan", FeatureState(feature_id="f", stage=Stage.PLAN, request="Plan"))
+    provider.build("verify", _state(Stage.VERIFY))

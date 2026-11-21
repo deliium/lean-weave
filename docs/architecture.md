@@ -14,7 +14,8 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Minimal state machine** orchestrator for MVP 1; LangGraph interrupt/checkpoint capabilities were validated in spikes and **deferred**
 - **Deterministic verification** (compile / tests / schema / file checks) preferred over LLM review
 - **Stage-scoped context** with hard bans on secrets, full skill trees, and cross-stage transcripts
-- **Deterministic context retrieval** — bounded repository inventory, AST symbols/imports, literal search with an `rg`/Python fallback, lexicographic ranking, and prompt budgets; no embeddings, LLM calls, or persistent index
+- **Deterministic context retrieval** — bounded repository inventory, AST symbols/imports, literal search with an `rg`/Python fallback, lexicographic ranking, and prompt budgets; no embeddings or LLM calls
+- **Disposable code index** — an optional SQLite cache of admitted Python facts outside the checkout; read-only reuse only, never a prompt authority, never written by the workflow
 - **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata through an explicit caller approval snapshot
 - **Worktree session** — public CLI provisions or adopts a linked worktree, freezes approvals, and drives the existing orchestrator without a second engine
 
@@ -35,8 +36,14 @@ Schemas (Pydantic): `src/lean_weave/schemas/`.
 ## Context retrieval
 
 `src/lean_weave/context/` implements the deterministic `ContextProvider` seam.
-It is read-only and LLM-free: no index, pack, transcript, or usage record is
+It is read-only and LLM-free: no pack, transcript, or usage record is
 persisted.
+
+`src/lean_weave/code_index/` adds a separate, disposable SQLite cache of
+path-independent Python facts. It is populated only by explicit
+`wl index build/update` commands, stored outside the checkout, and read by
+implement/retry context builds after V1 admission. It cannot change file
+membership, ranking, graph edges, prompt shape, or verification authority.
 
 ```text
 Repository (inventory + safe admissions)

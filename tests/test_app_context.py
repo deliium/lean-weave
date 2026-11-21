@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from lean_weave.app import build_app_context, create_llm_provider, create_orchestrator
+from lean_weave.app import (
+    build_app_context,
+    create_code_index,
+    create_context_provider,
+    create_llm_provider,
+    create_orchestrator,
+)
 from lean_weave.config import AppConfig, ConfigError, init_config
 from lean_weave.errors import DependencyUnavailable
 from lean_weave.executor.approval import approve_tools
@@ -194,3 +200,14 @@ def test_orchestrator_lazy_wiring_requires_checkpoints_and_approval(tmp_path, mo
     )
     with pytest.raises(DependencyUnavailable, match="approved check"):
         create_orchestrator(no_approval, check_ids=["parse"])
+
+
+def test_code_index_wiring_is_lazy_and_shares_config(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    context = build_app_context()
+    index = create_code_index(context)
+    assert index.root == tmp_path
+    assert index.state_dir == context.config.workflow.state_dir
+    provider = create_context_provider(context)
+    assert provider.fact_loader_factory is not None
+    assert not (tmp_path / ".lean-weave").exists()

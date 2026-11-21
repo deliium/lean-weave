@@ -1,11 +1,15 @@
+import os
+import stat as stat_module
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import lean_weave.context.repository as repository_module
 from lean_weave.config import ConfigError, ContextConfig
 from lean_weave.context.models import OmissionReason
-from lean_weave.context.repository import Repository
-from lean_weave.errors import ForbiddenContext
+from lean_weave.context.repository import Repository, validate_index_source_path
+from lean_weave.errors import ForbiddenContext, InvalidContextRequest
 
 from .conftest import init_git, write_files
 
@@ -149,12 +153,6 @@ def test_containment_is_rechecked_on_read(project: Path):
 
 
 def test_modified_snapshot_is_skipped(project: Path, monkeypatch):
-    import os
-    import stat as stat_module
-    from types import SimpleNamespace
-
-    import lean_weave.context.repository as repository_module
-
     write_files(project, {"pkg/mod.py": "x = 1\n"})
     repository = make_repository(project)
     repository.inventory()
@@ -173,3 +171,97 @@ def test_modified_snapshot_is_skipped(project: Path, monkeypatch):
     monkeypatch.setattr(repository_module.os, "fstat", changed)
     assert repository.try_read("pkg/mod.py") is None
     assert any(item.reason == OmissionReason.UNREADABLE for item in repository.omissions())
+
+
+def strict_repository(root: Path, **overrides) -> Repository:
+    return Repository(
+        root,
+        ContextConfig(**overrides),
+        state_dir=".lean-weave",
+        strict_source=True,
+    )
+
+
+def test_strict_scan_distinguishes_empty_and_uncertain(project: Path):
+    with strict_repository(project).scan_python_sources() as scan:
+        assert scan.snapshots == ()
+        assert scan.complete is True
+        assert scan.revalidate() is True
+
+    write_files(project, {"pkg/mod.py": "x = 1\n"})
+    with strict_repository(project, visited_entries_max=1).scan_python_sources() as scan:
+        assert scan.complete is False
+        assert any(reason == "scan_limit" for reason in scan.omission_counts)
+
+
+def test_strict_scan_respects_ignores_and_protection(project: Path):
+    write_files(
+        project,
+        {
+            ".gitignore": "ignored/*\n!ignored/keep.py\n",
+            "keep.py": "x = 1\n",
+            "ignored/keep.py": "y = 1\n",
+            "ignored/drop.py": "z = 1\n",
+            "config.yaml": "secret = 1\n",
+        },
+    )
+    repository = Repository(
+        project,
+        ContextConfig(),
+        strict_source=True,
+        protected_paths=("config.yaml",),
+    )
+    with repository.scan_python_sources() as scan:
+        assert scan.complete is True
+        assert [item.path for item in scan.snapshots] == ["ignored/keep.py", "keep.py"]
+
+
+def test_strict_scan_quarantines_credentials_without_paths(project: Path):
+    secret = "sk-" + "a" * 32
+    write_files(project, {"leak.py": f"VALUE = '{secret}'\n", "ok.py": "x = 1\n"})
+    with strict_repository(project).scan_python_sources() as scan:
+        assert [item.path for item in scan.snapshots] == ["ok.py"]
+        assert scan.omission_counts.get("secret") == 1
+        assert secret not in repr(scan)
+
+
+def test_strict_scan_omits_oversized_but_refuses_bad_ignore(project: Path):
+    write_files(project, {"big.py": "x" * 64, "ok.py": "x = 1\n"})
+    with strict_repository(project, candidate_bytes_max=32).scan_python_sources() as scan:
+        assert scan.complete is True
+        assert scan.omission_counts.get("oversized") == 1
+        assert "big.py" not in [item.path for item in scan.snapshots]
+
+    (project / ".gitignore").write_text("x" * 64)
+    with strict_repository(project, candidate_bytes_max=32).scan_python_sources() as scan:
+        assert scan.complete is False
+
+
+def test_strict_scan_rejects_hardlinks(project: Path):
+    write_files(project, {"one.py": "x = 1\n"})
+    os.link(project / "one.py", project / "two.py")
+    with strict_repository(project).scan_python_sources() as scan:
+        assert scan.complete is True
+        assert scan.snapshots == ()
+
+
+def test_strict_scan_revalidation_detects_change(project: Path):
+    write_files(project, {"a.py": "x = 1\n"})
+    repository = strict_repository(project)
+    with repository.scan_python_sources() as scan:
+        assert scan.revalidate() is True
+        (project / "a.py").write_text("x = 2\n")
+        assert scan.revalidate() is False
+
+    (project / ".gitignore").write_text("ignored.py\n")
+    with strict_repository(project).scan_python_sources() as scan:
+        assert scan.revalidate() is True
+        (project / ".gitignore").write_text("other.py\n")
+        assert scan.revalidate() is False
+
+
+def test_validate_index_source_path_is_canonical():
+    assert validate_index_source_path("pkg/a.py") == "pkg/a.py"
+    for value in ("./pkg/a.py", "/pkg/a.py", "pkg/a.txt", "pkg/../a.py", "C:/a.py"):
+        with pytest.raises(InvalidContextRequest):
+            validate_index_source_path(value)

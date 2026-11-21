@@ -10,6 +10,7 @@ Token-efficient AI coding pipeline that automates feature development with struc
 - **Context retrieval:** deterministic, LLM-free `context/` package — bounded repository inventory with `pathspec` ignore semantics, AST symbols/imports, literal search (`rg` stdin with Python fallback), optional preview Git recency, lexicographic ranking, provenance, progressive expansion, and prompt budgets.
 - **Code tools:** standalone `executor/` and `verify/` APIs for bounded reads, exact single-file patches, approved checks, and read-only Git path/status inspection. YAML does not authorize writes or spawns; the workflow binds them through a caller approval snapshot, with no tool CLI.
 - **Workflow:** minimal deterministic `workflow/` orchestrator (plan → implement → verify → bounded retry) with contained atomic checkpoints under `.lean-weave/workflow/`, typed results, plan policy, bounded tool loops, and per-scope token/call budgets. Public CLI wiring via `workflow/session.py` and `worktree/` isolation (`wl feature` / resume / status / cancel / result).
+- **Code index (V2):** optional disposable SQLite cache under `${XDG_CACHE_HOME:-~/.cache}/lean-weave/code-index/<checkout-key>/`; strict descriptor-relative admission, AST fact extraction, content-hash incremental reconcile, checked lookup, and per-checkout isolation. Explicit offline commands `wl index build/update/status/clear`; no LLM calls, no prompt authority, no writes into the checkout.
 - **Benchmarks (developer tooling):** `benchmarks/` fixture corpus, offline MockTransport CLI driver, metric projection, and optional explicit live runner — not a product `wl` command.
 - **LLM:** DeepSeek OpenAI-compatible API (`deepseek-flash` / `deepseek-v4-pro`) via the locked `openai` SDK client; centralized budgeted `DeepSeekProvider` with an atomic JSONL usage ledger
 - **Orchestrator (MVP 1):** minimal deterministic state machine (LangGraph deferred; spike retained)
@@ -23,5 +24,5 @@ No MCP, ACP, Docker orchestration, background workers, or multi-agent architectu
 
 - Architecture: `.ai-factory/ARCHITECTURE.md`
 - Plan: `.ai-factory/plans/v1-01-architecture.md`
-- Human docs: `docs/getting-started.md`, `docs/architecture.md`
+- Human docs: `docs/getting-started.md`, `docs/architecture.md`, `docs/code-index.md`
 - Roadmap: `.ai-factory/ROADMAP.md`

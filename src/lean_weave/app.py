@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx2
 from openai import OpenAI
 
+from lean_weave.code_index import CodeIndex
 from lean_weave.config import AppConfig, load_config
 from lean_weave.context.provider import DeterministicContextProvider
 from lean_weave.contracts import (
@@ -81,6 +82,41 @@ def build_app_context(
     return context
 
 
+def _protected_index_paths(context: AppContext, root: Path) -> tuple[str, ...]:
+    source = context.config_source
+    if source is None:
+        return ()
+    try:
+        resolved = Path(source).resolve()
+        if not resolved.is_relative_to(root):
+            return ()
+        return (resolved.relative_to(root).as_posix(),)
+    except (OSError, RuntimeError, ValueError):
+        return ()
+
+
+def create_code_index(
+    context: AppContext,
+    *,
+    workspace_root: Path | None = None,
+    cache_base: Path | None = None,
+) -> CodeIndex:
+    """Construct the lazy persistent-index seam; no scan, cache, or DB I/O."""
+
+    root = Path.cwd() if workspace_root is None else Path(workspace_root)
+    try:
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        resolved_root = root
+    return CodeIndex(
+        root,
+        context_config=context.config.context,
+        state_dir=context.config.workflow.state_dir,
+        protected_paths=_protected_index_paths(context, resolved_root),
+        cache_base=cache_base,
+    )
+
+
 def create_context_provider(
     context: AppContext,
     *,
@@ -110,6 +146,9 @@ def create_context_provider(
         root,
         config=context.config,
         metadata_digests=metadata_digests,
+        fact_loader_factory=lambda: create_code_index(
+            context, workspace_root=root
+        ).fact_loader(),
     )
 
 

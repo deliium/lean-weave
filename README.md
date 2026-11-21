@@ -11,6 +11,8 @@ uv sync
 uv run wl init
 uv run wl doctor
 uv run wl context search "create_llm_provider" --json
+uv run wl index build
+uv run wl index status
 # optional, potentially billable, requires an environment key:
 # uv run wl llm check
 ```
@@ -23,6 +25,7 @@ The executable aliases are `wl` and `lean-weave`, both using the same app.
 - **Structured state** — `FeatureState` / plan / tasks / verification; not full chat history
 - **Token-budget design** — stage-scoped context with digests, allowlists, and hard bans on secrets
 - **Deterministic context preview** — bounded discovery, AST symbols/imports, `rg`/Python search, provenance, progressive expansion, and prompt budgets without LLM calls
+- **Disposable code index** — offline SQLite cache of Python facts with incremental updates, checked lookup, and per-checkout isolation; never a prompt authority and never an LLM call
 - **Budgeted DeepSeek gateway** — thinking/tools/JSON modes, bounded retries, per-feature budgets, measured-versus-estimated usage
 - **Orchestrator design** — deterministic state machine for MVP 1; LangGraph deferred after spike validation
 - **Durable workflow** — atomic `.lean-weave/workflow/` checkpoints, bounded retries, explicit results, and no chat-history state
@@ -50,6 +53,7 @@ uv run wl feature --help
 | [Architecture](docs/architecture.md) | Components, orchestrator decision, boundaries |
 | [CLI Reference](docs/cli.md) | Commands, configuration, errors, injection |
 | [Code tools](docs/code-tools.md) | Offline reads, patches, checks, and Git metadata |
+| [Code index](docs/code-index.md) | Disposable SQLite cache, maintenance, recovery, isolation |
 | [Worktree workflow](docs/worktree-workflow.md) | Feature CLI, approvals, cancel, cleanup |
 | [Benchmarks](docs/benchmarks.md) | Fixture corpus, offline evidence, live preflight, V2 protocol |
 | [MVP 1 readiness](docs/mvp1-readiness.md) | Offline/live/safety verdicts and evidence links |
