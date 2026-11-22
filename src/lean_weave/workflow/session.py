@@ -30,6 +30,7 @@ from lean_weave.metrics.jsonl import JsonlMetricsCollector
 from lean_weave.schemas import FeatureState, Stage
 from lean_weave.verify.process import IsolationBackend
 from lean_weave.workflow.lifecycle import ExecutionMode, authority_digest, plan_digest
+from lean_weave.workflow.context_lifecycle import context_authority_material
 from lean_weave.workflow.orchestrator import MinimalWorkflowOrchestrator
 from lean_weave.workflow.planning import PlanPolicy
 from lean_weave.workflow.results import WorkflowResult, WorkflowStatus, project_result
@@ -127,6 +128,12 @@ class FeatureSession:
                 loaded.config, approval, selected_checks
             )
             baseline = self._fingerprint(worktree, approval.write_allow)
+            if loaded.config.context.workflow_mode == "v1":
+                baseline_callback = lambda: baseline
+            else:
+                baseline_callback = lambda: self._fingerprint(
+                    worktree, approval.write_allow
+                )
             store = JsonCheckpointStore(worktree, state_dir=loaded.config.workflow.state_dir)
             journal = JsonlMetricsCollector.from_config(loaded.config, root=worktree)
             context = AppContext(
@@ -152,7 +159,7 @@ class FeatureSession:
                 orchestrator_kwargs={
                     "mode": exec_mode,
                     "pinned_head": provisioned.identity.head,
-                    "baseline_fingerprint": lambda: baseline,
+                    "baseline_fingerprint": baseline_callback,
                     "binding_extra": lambda: {
                         "ownership": provisioned.record.ownership.value,
                         "branch": provisioned.record.branch,
@@ -746,6 +753,11 @@ class FeatureSession:
             max_task_tokens=config.workflow.max_task_tokens,
             feature_token_budget=config.workflow.feature_token_budget,
             max_task_llm_calls=config.workflow.max_task_llm_calls,
+            context_material=(
+                context_authority_material(config, approval, check_ids)
+                if config.context.workflow_mode != "v1"
+                else None
+            ),
         )
 
     def _select_checks(

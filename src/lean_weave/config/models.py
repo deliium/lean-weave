@@ -155,9 +155,15 @@ class ContextCacheConfig(ConfigModel):
     max_entries: int = Field(default=4096, ge=1, le=16_384)
 
 
+WorkflowContextMode = Literal["v1", "v2", "v2-with-v1-fallback"]
+
+
 class ContextConfig(ConfigModel):
     """Strict deterministic-retrieval limits; every cap is a hard maximum."""
 
+    # Product rollout selector for workflow stage context.  The default keeps
+    # the original build-only provider.  Preview flags remain independent.
+    workflow_mode: WorkflowContextMode = "v1"
     stage_prompt_tokens_max: int = Field(default=6000, gt=0)
     per_file_chars_max: int = Field(default=12000, gt=0)
     total_code_chars_max: int = Field(default=40000, gt=0)

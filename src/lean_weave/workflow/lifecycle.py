@@ -125,11 +125,14 @@ def authority_digest(
     max_task_tokens: int,
     feature_token_budget: int,
     max_task_llm_calls: int,
+    context_material: Mapping[str, Any] | None = None,
 ) -> str:
     """Digest of effective execution authority (paths, check bodies, limits).
 
     Path/ID allowlists alone are not enough: same-ID check argv drift and
     execution-limit drift must invalidate frozen review/resume bindings.
+    ``context_material`` is a V2-only, versioned projection.  It is omitted
+    entirely for V1 so legacy digests remain byte-for-byte stable.
     """
 
     selected = set(check_ids)
@@ -146,7 +149,7 @@ def authority_digest(
         if str(item.get("id", "")) in selected
     ]
     check_rows.sort(key=lambda row: row["id"])
-    material = {
+    material: dict[str, Any] = {
         "write_allow": sorted(write_allow),
         "check_ids": list(check_ids),
         "checks": check_rows,
@@ -156,14 +159,20 @@ def authority_digest(
         "feature_token_budget": int(feature_token_budget),
         "max_task_llm_calls": int(max_task_llm_calls),
     }
+    if context_material is not None:
+        material["context"] = {
+            "version": 1,
+            **{str(key): value for key, value in context_material.items()},
+        }
     payload = json.dumps(material, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode(
         "utf-8"
     )
     digest = digest_bytes(payload)
     log.debug(
-        "[Workflow.lifecycle] op=authority_digest checks=%s state_dir=%s",
+        "[Workflow.lifecycle] op=authority_digest checks=%s state_dir=%s context=%s",
         len(check_rows),
         state_dir,
+        context_material is not None,
     )
     return digest
 

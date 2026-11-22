@@ -112,6 +112,25 @@ Report mock-functional, local-estimate, and live DeepSeek results separately.
 Disclose missing coverage and cache/time conditions. Claim savings only against
 measured comparable results that also report correctness denominators.
 
+The workflow-context projection labels each report with `context_mode` and
+adds `estimated_input_tokens` per stage. `compare_workflow_context` requires
+matched successful runs, retains per-stage deltas, and reports missing estimates
+as `None` rather than zero. The checked-in paired fixture is:
+
+```bash
+uv run --locked pytest \
+  tests/cli/test_feature_context_e2e.py \
+  tests/benchmarks/test_workflow_context.py
+```
+
+Both arms use a fresh materialized Git repo, external trusted operator config,
+the same pinned manifest/checks/request/model/limits, and the real offline
+gateway journal. The fixture assertion is a strict reduction in the journal's
+`estimated_input_tokens` on `multi_file_feature`; this is a local preflight
+estimate, not API-reported input tokens. Scripted provider usage remains
+`mock_functional`, packing counters remain separate local observations, and no
+live-API claim is implied.
+
 ## Context-cache workload
 
 `uv run python -m benchmarks.context_cache --json` reports disabled,

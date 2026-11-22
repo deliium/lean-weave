@@ -80,6 +80,7 @@ class StageProjection:
     tokens: TokenRollup
     # Workflow stage name "retry" is repair, not transport retry.
     workflow_repair_stage: bool
+    estimated_input_tokens: int | None = None
 
 
 @dataclass
@@ -123,6 +124,7 @@ class BenchmarkMetricReport:
     context_size: ContextSizeProjection
     checks: CheckHistoryProjection
     inconsistencies: list[str] = field(default_factory=list)
+    context_mode: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -183,6 +185,7 @@ def project_metrics(
     check_executions: int | None = None,
     check_passes: int | None = None,
     check_failures: int | None = None,
+    context_mode: str | None = None,
 ) -> BenchmarkMetricReport:
     """Project a bounded metric report from reopened journal + checkpoint."""
 
@@ -266,6 +269,11 @@ def project_metrics(
         if stage.stage == "retry":
             repair_stage_attempts += stage.attempts
         presence = stage.presence
+        stage_estimated = [
+            item.estimated_input_tokens
+            for item in summary.attempts
+            if item.stage == stage.stage and item.estimated_input_tokens is not None
+        ]
         stages.append(
             StageProjection(
                 stage=stage.stage,
@@ -301,6 +309,9 @@ def project_metrics(
                     ),
                 ),
                 workflow_repair_stage=stage.stage == "retry",
+                estimated_input_tokens=(
+                    sum(stage_estimated) if stage_estimated else None
+                ),
             )
         )
 
@@ -342,6 +353,7 @@ def project_metrics(
         context_size=context,
         checks=checks,
         inconsistencies=inconsistencies,
+        context_mode=context_mode,
     )
     log.debug(
         "[Benchmark.metrics] feature=%s reservations=%s confirmed=%s uncertain=%s",
@@ -418,3 +430,101 @@ def load_report(path: Path) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError("invalid_report")
     return dict(payload)
+
+
+@dataclass
+class WorkflowContextStageComparison:
+    stage: str
+    v1_estimated_input_tokens: int | None
+    v2_estimated_input_tokens: int | None
+    delta: int | None
+
+
+@dataclass
+class WorkflowContextComparison:
+    """Matched-mode evidence; local estimates are not live API spend."""
+
+    schema_version: int
+    case_id: str
+    v1_status: str | None
+    v2_status: str | None
+    v1_sends: int
+    v2_sends: int
+    v1_estimated_input_tokens: int | None
+    v2_estimated_input_tokens: int | None
+    stages: list[WorkflowContextStageComparison] = field(default_factory=list)
+    strict_reduction: bool = False
+    comparable: bool = False
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def compare_workflow_context(
+    *,
+    case_id: str,
+    v1: BenchmarkMetricReport,
+    v2: BenchmarkMetricReport,
+) -> WorkflowContextComparison:
+    """Compare matched successful runs without reinterpreting V1 context size."""
+
+    comparable = (
+        v1.workflow_status == "success"
+        and v2.workflow_status == "success"
+        and v1.provenance == v2.provenance
+        and v1.journal_uncertain_attempts == 0
+        and v2.journal_uncertain_attempts == 0
+    )
+    v1_by_stage = {stage.stage: stage for stage in v1.stages}
+    v2_by_stage = {stage.stage: stage for stage in v2.stages}
+    stages: list[WorkflowContextStageComparison] = []
+    for name in sorted(set(v1_by_stage) | set(v2_by_stage)):
+        left = v1_by_stage.get(name)
+        right = v2_by_stage.get(name)
+        left_value = None if left is None else left.estimated_input_tokens
+        right_value = None if right is None else right.estimated_input_tokens
+        delta = (
+            None
+            if left_value is None or right_value is None
+            else right_value - left_value
+        )
+        stages.append(
+            WorkflowContextStageComparison(
+                stage=name,
+                v1_estimated_input_tokens=left_value,
+                v2_estimated_input_tokens=right_value,
+                delta=delta,
+            )
+        )
+    left_total = v1.tokens.estimated_input_tokens
+    right_total = v2.tokens.estimated_input_tokens
+    strict = bool(
+        comparable
+        and left_total is not None
+        and right_total is not None
+        and right_total < left_total
+    )
+    notes: list[str] = []
+    if v1.context_mode is None:
+        notes.append("v1_context_mode_unlabelled")
+    if v2.context_mode is None:
+        notes.append("v2_context_mode_unlabelled")
+    if not comparable:
+        notes.append("runs_not_matched_and_successful")
+    if left_total is None or right_total is None:
+        notes.append("estimated_input_missing")
+    return WorkflowContextComparison(
+        schema_version=1,
+        case_id=case_id,
+        v1_status=v1.workflow_status,
+        v2_status=v2.workflow_status,
+        v1_sends=v1.logical_workflow_calls,
+        v2_sends=v2.logical_workflow_calls,
+        v1_estimated_input_tokens=left_total,
+        v2_estimated_input_tokens=right_total,
+        stages=stages,
+        strict_reduction=strict,
+        comparable=comparable,
+        notes=notes,
+    )

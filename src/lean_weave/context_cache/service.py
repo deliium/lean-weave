@@ -364,6 +364,27 @@ class SqliteContextCache:
         codec: CacheCodec,
         write_stats: bool = True,
     ) -> CacheOutcome:
+        outcome = self._lookup(key, proof, codec=codec, write_stats=write_stats)
+        observer = getattr(self, "observer", None)
+        if callable(observer):
+            try:
+                observer(
+                    key.kind.value,
+                    outcome.result.value,
+                    None if outcome.reason is None else outcome.reason.value,
+                )
+            except Exception:  # noqa: BLE001 - telemetry is optional
+                pass
+        return outcome
+
+    def _lookup(
+        self,
+        key: CacheKey,
+        proof: CacheProof,
+        *,
+        codec: CacheCodec,
+        write_stats: bool = True,
+    ) -> CacheOutcome:
         if key.kind is not proof.kind:
             return CacheOutcome(CacheResult.BYPASS, None, CacheReason.INVALID_INPUT)
         try:
@@ -439,6 +460,16 @@ class SqliteContextCache:
             return CacheOutcome(CacheResult.BYPASS, None, CacheReason.UNAVAILABLE)
 
     def publish(self, key: CacheKey, proof: CacheProof, value, *, codec: CacheCodec, batch=None) -> bool:
+        ok = self._publish(key, proof, value, codec=codec, batch=batch)
+        observer = getattr(self, "observer", None)
+        if callable(observer):
+            try:
+                observer(key.kind.value, "miss" if ok else "bypass", None)
+            except Exception:  # noqa: BLE001 - telemetry is optional
+                pass
+        return ok
+
+    def _publish(self, key: CacheKey, proof: CacheProof, value, *, codec: CacheCodec, batch=None) -> bool:
         if key.kind is not proof.kind:
             return False
         try:

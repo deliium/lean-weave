@@ -286,9 +286,13 @@ class PackingCatalog:
         snapshot = self.snapshots.get(path)
         if snapshot is None:
             return None
+        lines = snapshot.text.split("\n")
         spans = self.spans(path)
         for span in spans:
             if span.kind != "definition":
+                line = lines[span.start - 1].lstrip() if span.start <= len(lines) else ""
+                if line.startswith("import ") or line.startswith("from "):
+                    continue
                 return _unit_from_span(
                     snapshot,
                     start=span.start,
@@ -298,6 +302,58 @@ class PackingCatalog:
                     reasons=("dependency",),
                 )
         return None
+
+    def complete_unit_for_path(self, path: str) -> SourceUnit | None:
+        """One complete, deterministic unit for a mandatory workflow target."""
+
+        snapshot = self.snapshots.get(path)
+        if snapshot is None:
+            return None
+        if is_python(path):
+            facts = self.facts(path)
+            if facts:
+                fact = sorted(
+                    facts,
+                    key=lambda item: (
+                        item.start_line,
+                        item.end_line,
+                        item.traversal_order,
+                    ),
+                )[0]
+                return _unit_from_span(
+                    snapshot,
+                    start=_decorator_line_start(snapshot, fact.start_line),
+                    end=fact.end_line,
+                    kind="definition",
+                    symbol=fact.local_name,
+                    reasons=("required_target",),
+                )
+            statement = self.first_statement_unit(path)
+            if statement is not None:
+                return SourceUnit(
+                    path=statement.path,
+                    start_line=statement.start_line,
+                    end_line=statement.end_line,
+                    digest=statement.digest,
+                    kind=statement.kind,
+                    text=statement.text,
+                    symbol=statement.symbol,
+                    reasons=("required_target",),
+                    covered_selectors=statement.covered_selectors,
+                    prior_ids=statement.prior_ids,
+                )
+            return None
+        line_count = len(iter_lines(snapshot.text))
+        if line_count == 0:
+            return None
+        return _unit_from_span(
+            snapshot,
+            start=1,
+            end=1,
+            kind="range",
+            symbol=None,
+            reasons=("required_target",),
+        )
 
     def first_definition_for_path(
         self, path: str, ranked: Sequence[RetrievalHit]

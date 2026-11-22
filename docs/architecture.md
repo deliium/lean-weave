@@ -90,7 +90,8 @@ Design constraints:
 - Plan and verify use approved metadata digests only. Implement reads task paths,
   one-hop imports, and enabled matching tests. Retry reads eligible affected
   files and ignores arbitrary diagnostics.
-- The feature workflow builds stage-scoped packs through `ContextProvider`.
+- The feature workflow builds stage-scoped packs through `ContextProvider` by
+  default. `context.workflow_mode: v2` opts into the private adapter below.
   `wl context` remains a separate offline preview surface.
 
 ## Token-aware context packing (V2)
@@ -124,6 +125,35 @@ Design constraints:
   gateway validates it before client creation, booking, or transport.
 - No index maintenance, checkout writes, model calls, embeddings, summaries, or
   workflow orchestrator changes are involved.
+
+## Workflow context integration (V2)
+
+`context.workflow_mode` selects the workflow context path in the trusted
+operator config:
+
+- `v1` (default) — unchanged `ContextProvider.build`; no V2 construction or
+  store I/O.
+- `v2` — the private `workflow/context_lifecycle.py` adapter projects only the
+  active stage. Planning receives exact request text, approved paths, registered
+  fragments, and compact map metadata. Implement and retry receive mandatory
+  complete units for the active task (or attributed retry paths), bounded
+  dependencies, and counted raw-byte edit revisions. Verification and diagnosis
+  remain deterministic and issue no model calls.
+- `v2-with-v1-fallback` — identical to `v2`, except an implement attempt whose
+  sole pre-send reason is `no_relevant_source` may render the V1 builder under
+  the same frozen read scope and output cap.
+
+Expansion stays inside the existing `read_range` / `read_symbol` tool loop.
+Accepted units are added to the next round's freshly assembled source block;
+duplicates return `no_change`; cumulative attempt/source caps survive owned
+edits; stale or unproven source never reuses an old packed block. The existing
+`PackedRequestGuard` validates each sealed wire shape before gateway booking.
+
+`workflow/context_metrics.py` records stage/attempt counts, opaque fragment
+ordinals, section estimates, the gateway-comparable input estimate, retrieval
+time, expansion and duplicate counts, and cache hit/miss observations. It does
+not persist events in `FeatureState`, add a ledger, or log paths, prompts,
+source, diagnostics, keys, or reasoning.
 
 ## Standalone code tools
 

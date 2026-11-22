@@ -6,7 +6,18 @@ import keyword
 from pathlib import PurePosixPath
 
 from lean_weave.code_index import CodeIndex
-from lean_weave.context.policy import contains_secret, safe_root
+from lean_weave.code_index.models import (
+    FileRecord,
+    IndexGeneration,
+    IndexHeader,
+    derive_file_id,
+    extractor_key,
+    manifest_sha256,
+    policy_key,
+    source_revision,
+)
+from lean_weave.context.policy import contains_secret, is_python, safe_root
+from lean_weave.context.python_index import module_name_for_path
 from lean_weave.context.repository import Repository, SourceScan
 from lean_weave.context_cache.imports import ImportCache
 from lean_weave.context_cache.map_rows import MapRowCache
@@ -14,7 +25,7 @@ from lean_weave.context_cache.models import ContextCache
 from lean_weave.context_cache.service import CachePolicy
 from lean_weave.errors import CodeIndexError, ForbiddenContext, RepositoryMapError
 from lean_weave.logging_setup import get_logger
-from lean_weave.repository_map.graph import refresh_graph
+from lean_weave.repository_map.graph import build_graph, refresh_graph
 from lean_weave.repository_map.models import (
     DependencyGraph,
     ImportRelation,
@@ -706,3 +717,70 @@ class RepositoryMap:
         if batch is not None and self._cache is not None:
             self._cache.flush(batch)
         return result
+
+
+def scoped_graph_for_scan(
+    scan: SourceScan,
+    *,
+    facts_loader,
+    checkout_key: str,
+    state_dir: str,
+    protected_paths: tuple[str, ...] = (),
+    exclusions: tuple[str, ...] = (),
+    candidate_bytes_max: int,
+) -> DependencyGraph:
+    """Build a metadata graph from only the caller's admitted scoped snapshots.
+
+    Off-scope imports remain unresolved rather than being inferred from a
+    broader checkout.  The caller must not present this as a whole-generation
+    read.
+    """
+
+    records: list[FileRecord] = []
+    for snapshot in sorted(scan.snapshots, key=lambda item: item.path):
+        if not is_python(snapshot.path):
+            continue
+        facts = facts_loader(snapshot)
+        records.append(
+            FileRecord(
+                path=snapshot.path,
+                file_id=derive_file_id(
+                    checkout_key, "scoped", snapshot.path, snapshot.digest
+                ),
+                module_name=module_name_for_path(snapshot.path),
+                digest=snapshot.digest,
+                size_bytes=snapshot.size_bytes,
+                line_count=snapshot.lines,
+                parse_status=facts.status,
+                facts=facts,
+            )
+        )
+    policy = policy_key(
+        state_path=state_dir,
+        protected_paths=protected_paths,
+        exclusions=exclusions,
+        candidate_bytes_max=candidate_bytes_max,
+    )
+    revision = source_revision(
+        policy, {snapshot.path: snapshot.digest for snapshot in scan.snapshots}
+    )
+    extractor = extractor_key()
+    header = IndexHeader(
+        schema_version=1,
+        checkout_key=checkout_key,
+        revision=revision,
+        policy_key=policy,
+        extractor_key=extractor,
+        manifest_sha256=manifest_sha256(
+            schema_version=1,
+            checkout_key=checkout_key,
+            revision=revision,
+            policy_key_value=policy,
+            extractor_key_value=extractor,
+            files=tuple(records),
+        ),
+        files=len(records),
+        symbols=sum(len(item.facts.definitions) for item in records),
+        imports=sum(len(item.facts.imports) for item in records),
+    )
+    return build_graph(IndexGeneration(header=header, records=tuple(records)))

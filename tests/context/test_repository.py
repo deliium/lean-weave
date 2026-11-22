@@ -265,3 +265,50 @@ def test_validate_index_source_path_is_canonical():
     for value in ("./pkg/a.py", "/pkg/a.py", "pkg/a.txt", "pkg/../a.py", "C:/a.py"):
         with pytest.raises(InvalidContextRequest):
             validate_index_source_path(value)
+
+
+def test_scoped_retrieval_scan_filters_before_body_open(project: Path, monkeypatch):
+    write_files(
+        project,
+        {
+            "src/a.py": "A = 1\n",
+            "src/b.py": "B = 1\n",
+            "src/c.py": "C = 1\n",
+            "notes.txt": "notes\n",
+        },
+    )
+    repository = Repository(project, ContextConfig(), strict_source=True)
+    opened: list[str] = []
+    original = repository_module._StrictScanner._read_strict
+
+    def recording(self, dir_fd, name, expected, rel):
+        opened.append(rel)
+        return original(self, dir_fd, name, expected, rel)
+
+    monkeypatch.setattr(repository_module._StrictScanner, "_read_strict", recording)
+    with repository.scan_retrieval_sources(
+        paths=frozenset({"src/a.py", "src/c.py"}),
+        read_filter=lambda path: path != "src/c.py",
+    ) as scan:
+        assert scan.complete is True
+        assert [item.path for item in scan.snapshots] == ["src/a.py"]
+    assert "src/b.py" not in opened
+    assert "src/c.py" not in opened
+
+
+def test_empty_scoped_scan_admits_no_source(project: Path):
+    write_files(project, {"src/a.py": "A = 1\n"})
+    repository = Repository(project, ContextConfig(), strict_source=True)
+    with repository.scan_retrieval_sources(paths=frozenset()) as scan:
+        assert scan.complete is True
+        assert scan.snapshots == ()
+
+
+def test_scoped_snapshot_keeps_raw_and_canonical_revisions(project: Path):
+    write_files(project, {"src/a.py": "A = 1\r\n"})
+    repository = Repository(project, ContextConfig(), strict_source=True)
+    with repository.scan_retrieval_sources(paths=frozenset({"src/a.py"})) as scan:
+        snapshot = scan.snapshots[0]
+        assert snapshot.raw_revision is not None
+        assert snapshot.raw_revision.startswith("sha256:")
+        assert snapshot.raw_revision != snapshot.digest

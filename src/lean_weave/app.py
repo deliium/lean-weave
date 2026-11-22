@@ -38,6 +38,8 @@ from lean_weave.repository_map import MapLimits, RepositoryMap
 from lean_weave.verify.process import IsolationBackend, run_bounded
 from lean_weave.verify.runner import ApprovedChecksRunner
 from lean_weave.workflow.instructions import load_instructions
+from lean_weave.workflow.context_lifecycle import WorkflowContextAdapter
+from lean_weave.workflow.context_metrics import ContextObserver
 from lean_weave.workflow.orchestrator import MinimalWorkflowOrchestrator
 from lean_weave.workflow.planning import PlanPolicy
 from lean_weave.workflow.state import JsonCheckpointStore, checkpoint_capability
@@ -582,6 +584,7 @@ def create_orchestrator(
     instructions: Mapping[str, Sequence[str]] | None = None,
     workspace_root: Path | None = None,
     orchestrator_kwargs: Mapping[str, object] | None = None,
+    context_observer: ContextObserver | None = None,
 ) -> WorkflowOrchestrator:
     """Construct the minimal driver lazily; no network, scan, or ledger I/O.
 
@@ -635,6 +638,67 @@ def create_orchestrator(
         state_path = (root / context.config.workflow.state_dir).resolve()
         accounting = JsonlMetricsCollector(state_path)
     extra = dict(orchestrator_kwargs or {})
+    workflow_mode = context.config.context.workflow_mode
+    if (
+        workflow_mode in {"v2", "v2-with-v1-fallback"}
+        and context.context_provider is None
+        and approval is not None
+        and "context_lifecycle" not in extra
+    ):
+        protected = _protected_index_paths(context, root.resolve())
+        scoped_config = context.config.context.model_copy(
+            update={
+                "candidate_bytes_max": min(
+                    context.config.context.candidate_bytes_max,
+                    approval.limits.file_bytes_max if approval is not None else context.config.context.candidate_bytes_max,
+                )
+            }
+        )
+        scoped_repository = Repository(
+            root,
+            scoped_config,
+            state_dir=context.config.workflow.state_dir,
+            strict_source=True,
+            protected_paths=protected,
+        )
+        scoped_cache = create_context_cache(
+            context, workspace_root=root
+        )
+        scoped_index = CodeIndex(
+            root,
+            context_config=scoped_config,
+            state_dir=context.config.workflow.state_dir,
+            protected_paths=protected,
+        )
+        scoped_retriever = ContextRetriever(scoped_repository, cache=scoped_cache)
+        scoped_packer = ContextPacker(
+            scoped_repository,
+            retriever=scoped_retriever,
+            model=model if model is not None else context.config.llm.model,
+            thinking=context.config.llm.thinking,
+            cache=scoped_cache,
+            workflow_tool_tokens=4096,
+        )
+        extra["context_lifecycle"] = WorkflowContextAdapter(
+            config=context.config,
+            root=root,
+            approval=approval,  # type: ignore[arg-type]
+            repository=scoped_repository,
+            packer=scoped_packer,
+            cache=scoped_cache,
+            index=scoped_index,
+            mode=workflow_mode,
+            model=model if model is not None else context.config.llm.model,
+            thinking=(
+                thinking
+                if thinking is not None
+                else ("enabled" if context.config.llm.thinking else "disabled")
+            ),
+            output_cap=context.config.llm.max_output_tokens,
+            observer=context_observer,
+        )
+    elif workflow_mode in {"v2", "v2-with-v1-fallback"}:
+        log.debug("[AppContext.context] selection=v1 injected_or_orchestrated")
     orchestrator = MinimalWorkflowOrchestrator(
         config=context.config.workflow,
         llm_provider=create_llm_provider(context, journal=accounting),  # type: ignore[arg-type]

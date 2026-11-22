@@ -147,3 +147,27 @@ def test_packing_section_caps_are_independent():
     assert packing.map_tokens == 0
     assert packing.source_tokens == 4000
     assert packing.total_tokens == 5000
+
+
+def test_workflow_mode_defaults_to_v1_and_validates_values():
+    assert AppConfig().context.workflow_mode == "v1"
+    assert ContextConfig(workflow_mode="v2").workflow_mode == "v2"
+    assert (
+        ContextConfig(workflow_mode="v2-with-v1-fallback").workflow_mode
+        == "v2-with-v1-fallback"
+    )
+    with pytest.raises(ValidationError):
+        ContextConfig(workflow_mode="auto")
+    with pytest.raises(ValidationError):
+        ContextConfig(workflow_mode=True)
+
+
+def test_workflow_mode_is_independent_of_preview_flags():
+    context = ContextConfig(
+        workflow_mode="v2",
+        packing={"cli_default": False},
+        cache={"enabled": False},
+    )
+    assert context.workflow_mode == "v2"
+    assert context.packing.cli_default is False
+    assert context.cache.enabled is False

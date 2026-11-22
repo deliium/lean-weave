@@ -15,7 +15,7 @@ from typing import Any
 
 from lean_weave.contracts import LLMProvider
 from lean_weave.contracts._types import LLMMessage, LLMRequest
-from lean_weave.errors import ProviderError, WorkflowBudgetExceeded
+from lean_weave.errors import ContextPreparationError, ProviderError, WorkflowBudgetExceeded
 from lean_weave.logging_setup import get_logger
 from lean_weave.schemas import TokenUsage
 from lean_weave.workflow.budget import BudgetReservation, WorkflowBudget
@@ -44,6 +44,10 @@ class ToolLoopOutcome:
     overage: bool = False
     unconfirmed: bool = False
     cancelled: bool = False
+    refused: bool = False
+    refusal_category: str | None = None
+    refusal_reason: str | None = None
+    prepared_wire_input_estimate: int = 0
     events: tuple[ToolEvent, ...] = field(default_factory=tuple)
     final_message: Mapping[str, Any] | None = None
     usage: TokenUsage = field(default_factory=TokenUsage)
@@ -109,6 +113,7 @@ def run_tool_loop(
     response_format: Mapping[str, Any] | None = None,
     reasoning_effort: str | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    round_builder: Callable[[Sequence[LLMMessage]], LLMRequest] | None = None,
 ) -> ToolLoopOutcome:
     if max_rounds < 1:
         raise WorkflowBudgetExceeded("tool_round_limit")
@@ -135,30 +140,84 @@ def run_tool_loop(
                 events=tuple(events),
                 usage=usage_total,
             )
-        request: LLMRequest = {
-            "feature_id": feature_id,
-            "stage": stage,  # type: ignore[typeddict-item]
-            "messages": conversation,
-            "options": {"retry_limit": 0},
-        }
-        if model is not None:
-            request["model"] = model
-        if tool_schemas:
-            request["tools"] = list(tool_schemas)
-        if response_format is not None:
-            request["response_format"] = dict(response_format)
-        if thinking_enabled:
-            request["thinking"] = "enabled"
-        if reasoning_effort is not None and thinking_enabled:
-            request["reasoning_effort"] = reasoning_effort
+        prepared_wire_input = 0
+        if round_builder is not None:
+            try:
+                request = round_builder(tuple(conversation))
+            except ContextPreparationError as exc:
+                log.warning(
+                    "[Workflow.loop] feature=%s scope=%s round=%s outcome=context_refused category=%s",
+                    feature_id,
+                    scope,
+                    round_index + 1,
+                    exc.category,
+                )
+                return ToolLoopOutcome(
+                    content=None,
+                    structured=None,
+                    rounds=round_index,
+                    calls=calls,
+                    refused=True,
+                    refusal_category=exc.category,
+                    refusal_reason=exc.reason,
+                    events=tuple(events),
+                    usage=usage_total,
+                )
+            if not isinstance(request, Mapping):
+                raise ProviderError("Invalid prepared request")
+            request = dict(request)
+            request["feature_id"] = feature_id
+            request["stage"] = stage  # type: ignore[typeddict-item]
+        else:
+            request = {
+                "feature_id": feature_id,
+                "stage": stage,  # type: ignore[typeddict-item]
+                "messages": conversation,
+                "options": {"retry_limit": 0},
+            }
+            if model is not None:
+                request["model"] = model
+            if tool_schemas:
+                request["tools"] = list(tool_schemas)
+            if response_format is not None:
+                request["response_format"] = dict(response_format)
+            if thinking_enabled:
+                request["thinking"] = "enabled"
+            if reasoning_effort is not None and thinking_enabled:
+                request["reasoning_effort"] = reasoning_effort
 
+        reservation_messages = request.get("messages") or []
+        reservation_tools = request.get("tools")
+        reservation_format = request.get("response_format")
+        thinking_value = request.get("thinking", "disabled")
+        if cancel_check is not None and cancel_check():
+            log.info(
+                "[Workflow.loop] feature=%s scope=%s round=%s outcome=cancelled_after_prepare",
+                feature_id,
+                scope,
+                round_index + 1,
+            )
+            return ToolLoopOutcome(
+                content=None,
+                structured=None,
+                rounds=round_index,
+                calls=calls,
+                cancelled=True,
+                events=tuple(events),
+                usage=usage_total,
+            )
+        estimate_extra = (
+            {"thinking": {"type": thinking_value}} if thinking_value else None
+        )
         reservation: BudgetReservation = budget.reserve(
             scope,
-            messages=conversation,
-            tools=tool_schemas,
-            response_format=response_format,
+            messages=reservation_messages,
+            tools=reservation_tools,
+            response_format=reservation_format,
             output_cap=output_cap,
+            extra=estimate_extra,
         )
+        prepared_wire_input = reservation.estimated_input_tokens
         operation_id = f"llm-{uuid.uuid4().hex}"
         budget.begin_effect(operation_id, scope)
         try:

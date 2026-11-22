@@ -70,6 +70,22 @@ class ContextBudgetError(ContextError):
     """The required prompt envelope exceeds the configured stage budget."""
 
 
+_CONTEXT_REFUSAL_CATEGORIES = frozenset(
+    {"budget_exhausted", "context_insufficient", "context_stale"}
+)
+
+
+class ContextPreparationError(ContextError):
+    """A local workflow context refusal; no provider request was sent."""
+
+    def __init__(self, category: str, reason: str) -> None:
+        self.category = category if category in _CONTEXT_REFUSAL_CATEGORIES else "context_insufficient"
+        self.reason = "".join(
+            char for char in str(reason) if 32 <= ord(char) < 127
+        )[:64] or self.category
+        super().__init__(self.reason)
+
+
 _CODE_INDEX_CODES = frozenset(
     {
         "root_unavailable",

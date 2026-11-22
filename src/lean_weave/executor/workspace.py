@@ -597,6 +597,21 @@ class Workspace:
 
         return self.authorize(path, write=False)
 
+    def read_policy_decision(self, path: str) -> str:
+        """Pure pathspec/read-policy decision without opening or ignoring I/O.
+
+        Strict admission additionally applies nested ignore rules and
+        descriptor-relative checks.  This helper only answers whether the
+        frozen executor read allowlist, exclusions, protected paths, and name
+        type policy permit a body read.
+        """
+
+        try:
+            rel = normalize_tool_path(path)
+        except ValueError:
+            return "invalid"
+        return self._name_policy(rel, write=False)
+
     def replace_file(self, snapshot: TextSnapshot, payload: bytes) -> str:
         """Atomically replace one authorized file.
 

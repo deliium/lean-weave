@@ -6,6 +6,7 @@ from pathlib import Path
 
 from lean_weave.code_index import CodeIndex
 from lean_weave.config.models import ContextConfig
+from lean_weave.context.python_index import extract_python_facts
 from lean_weave.context.repository import Repository
 from lean_weave.repository_map import RepositoryMap
 
@@ -73,3 +74,24 @@ def test_retrieval_graph_keeps_circular_resolved_edges(tmp_path: Path, cache: Pa
             for item in graph.relations
         }
         assert paths == {"a.py", "b.py"}
+
+
+def test_scoped_graph_does_not_infer_off_scope_edges(tmp_path, monkeypatch):
+    from lean_weave.repository_map.service import scoped_graph_for_scan
+
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / "src/a.py").write_text("import b\nvalue = 1\n", encoding="utf-8")
+    (root / "src/b.py").write_text("def helper():\n    return 1\n", encoding="utf-8")
+    repo = Repository(root, ContextConfig(), strict_source=True)
+    with repo.scan_retrieval_sources(paths=frozenset({"src/a.py"})) as scan:
+        graph = scoped_graph_for_scan(
+            scan,
+            facts_loader=extract_python_facts,
+            checkout_key="sha256:" + "a" * 64,
+            state_dir=".lean-weave",
+            candidate_bytes_max=131072,
+        )
+    assert [node.path for node in graph.nodes] == ["src/a.py"]
+    assert all(relation.status != "resolved" for relation in graph.relations)
+    assert graph.forward[graph.nodes[0].file_id] == ()

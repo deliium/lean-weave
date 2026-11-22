@@ -9,12 +9,13 @@ snapshot per file for the whole operation.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import re
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Literal, Mapping
+from typing import Callable, Iterator, Literal, Mapping
 
 import pathspec
 
@@ -52,12 +53,19 @@ class FileSnapshot:
     text: str
     digest: str
     size_bytes: int
+    raw_revision: str | None = None
 
     @property
     def lines(self) -> int:
         if not self.text:
             return 0
         return self.text.count("\n") + (0 if self.text.endswith("\n") else 1)
+
+
+def _raw_revision(data: bytes) -> str:
+    """Executor-compatible SHA-256 of the original file bytes."""
+
+    return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
 @dataclass
@@ -472,21 +480,40 @@ class Repository:
             yield scan
 
     @contextlib.contextmanager
-    def scan_retrieval_sources(self) -> Iterator[SourceScan]:
+    def scan_retrieval_sources(
+        self,
+        *,
+        paths: Iterable[str] | None = None,
+        read_filter: Callable[[str], bool] | None = None,
+    ) -> Iterator[SourceScan]:
         """Admit supported text sources for offline retrieval evidence.
 
         Freezes the effective admission policy at session open so later
         mutations of :class:`ContextConfig` cannot change the observed pool.
+        ``paths`` is an internal workflow scope: ``None`` keeps the preview
+        whole-checkout contract and an empty iterable admits no source body.
+        ``read_filter`` applies the executor read policy before any body open.
         """
 
-        with self._scan_sources(mode="retrieval") as scan:
+        scoped = None if paths is None else frozenset(paths)
+        with self._scan_sources(
+            mode="retrieval", paths=scoped, read_filter=read_filter
+        ) as scan:
             yield scan
 
     @contextlib.contextmanager
-    def _scan_sources(self, *, mode: ScanMode) -> Iterator[SourceScan]:
+    def _scan_sources(
+        self,
+        *,
+        mode: ScanMode,
+        paths: frozenset[str] | None = None,
+        read_filter: Callable[[str], bool] | None = None,
+    ) -> Iterator[SourceScan]:
         if not self.strict_source:
             raise ContextScanError("Strict source admission is not enabled")
-        scanner = _StrictScanner(self, mode=mode)
+        scanner = _StrictScanner(
+            self, mode=mode, scoped_paths=paths, read_filter=read_filter
+        )
         scanner.open()
         try:
             yield scanner.run()
@@ -580,7 +607,9 @@ class Repository:
             self._record(None, OmissionReason.SECRET, "credential_pattern")
             log.warning("[Context.admit] quarantined a candidate by the credential filter")
             return None
-        snapshot = FileSnapshot(normalized, text, content_digest(text), len(data))
+        snapshot = FileSnapshot(
+            normalized, text, content_digest(text), len(data), _raw_revision(data)
+        )
         self._snapshots[normalized] = snapshot
         log.debug("[Context.admit] chars=%s", len(text))
         return snapshot
@@ -599,9 +628,18 @@ class Repository:
 class _StrictScanner:
     """One anchored, descriptor-relative scan with a bounded witness set."""
 
-    def __init__(self, repository: Repository, *, mode: ScanMode = "python") -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        *,
+        mode: ScanMode = "python",
+        scoped_paths: frozenset[str] | None = None,
+        read_filter: Callable[[str], bool] | None = None,
+    ) -> None:
         self.repository = repository
         self.mode = mode
+        self.scoped_paths = scoped_paths
+        self.read_filter = read_filter
         exclusions = tuple(repository.config.exclusions)
         self.policy = FrozenAdmissionPolicy(
             root=str(repository.root),
@@ -862,6 +900,12 @@ class _StrictScanner:
         if not self._accepts_file(rel):
             self._count("unsupported")
             return
+        if self.scoped_paths is not None and rel not in self.scoped_paths:
+            self._count("excluded")
+            return
+        if self.read_filter is not None and not self.read_filter(rel):
+            self._count("excluded")
+            return
         if rel in self.policy.protected_paths:
             self._count("excluded")
             return
@@ -988,7 +1032,9 @@ class _StrictScanner:
         if contains_secret(text):
             log.warning("[Context.strict] quarantined a candidate by the credential filter")
             return "secret", None
-        return "ok", FileSnapshot(rel, text, content_digest(text), len(data))
+        return "ok", FileSnapshot(
+            rel, text, content_digest(text), len(data), _raw_revision(data)
+        )
 
     # ------------------------------------------------------------------
     # Witness revalidation

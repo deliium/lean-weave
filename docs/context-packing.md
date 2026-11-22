@@ -226,6 +226,24 @@ Freshness is a point-in-time guarantee for the duration of one operation. The
 packer does not maintain the code index, does not write into the checkout, and
 does not follow symlinks.
 
+## Workflow use
+
+`context.workflow_mode` is separate from `context.packing.cli_default`. Setting
+`v2` in the trusted operator config lets the existing orchestrator seal each
+implement/retry round through the same packer and `PackedRequestGuard`:
+
+- initial required units are complete task targets; optional definitions,
+  direct dependencies, and enabled matching tests fill remaining section space;
+- the source block carries one counted `(path, expected_revision)` entry per
+  editable path, using the raw-byte revision from the same admitted snapshot;
+- expansion is restricted to the existing read tools and the frozen read scope;
+- the effective output cap is `min(llm.max_output_tokens, packing.output_tokens)`;
+- each round is re-counted after tool replay is added and before dispatch.
+
+The workflow-only tool section minimum is larger than the preview default so
+the three fixed tool schemas plus bounded replay can fit; preview flag behavior
+and `ContextProvider.build` remain unchanged.
+
 ## Rollback
 
 Omit the packed flags, or set `context.packing.cli_default: false`. The V1

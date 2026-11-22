@@ -144,6 +144,7 @@ class ContextPacker:
         model: str = "deepseek-flash",
         thinking: bool = False,
         cache: ContextCache | None = None,
+        workflow_tool_tokens: int | None = None,
     ) -> None:
         self.repository = repository
         self.retriever = retriever or ContextRetriever(repository)
@@ -152,6 +153,7 @@ class ContextPacker:
         self.context_config = repository.config
         self.default_model = model
         self.default_thinking = thinking
+        self._workflow_tool_tokens = workflow_tool_tokens
         self._cache = cache if cache is not None and cache.enabled else None
         self._fact_cache = None
         self._span_cache = None
@@ -170,6 +172,99 @@ class ContextPacker:
     def build(self, request: PackRequest) -> PackResult:
         result, _outcome = self._compose(request)
         return result
+
+    def compose_scoped(
+        self,
+        request: PackRequest,
+        *,
+        scan_paths: frozenset[str] | None,
+        read_filter=None,
+        graph: DependencyGraph | None = None,
+        output_cap: int | None = None,
+    ) -> tuple[PackResult, Composition | None]:
+        """Compose without widening a workflow's frozen read/emit scope."""
+
+        return self._compose(
+            request,
+            scan_paths=scan_paths,
+            read_filter=read_filter,
+            graph=graph,
+            output_cap=output_cap,
+        )
+
+    def open_scoped(
+        self,
+        request: PackRequest,
+        *,
+        scan_paths: frozenset[str] | None,
+        read_filter=None,
+        graph: DependencyGraph | None = None,
+        output_cap: int | None = None,
+    ) -> tuple[PackResult, Composition | None, PackingSession | None]:
+        result, outcome = self._compose(
+            request,
+            scan_paths=scan_paths,
+            read_filter=read_filter,
+            graph=graph,
+            output_cap=output_cap,
+        )
+        if result.status != "ready" or outcome is None:
+            return result, outcome, None
+        session = self._session_from_composition(request, outcome)
+        return result, outcome, session
+
+    def session_from_composition(
+        self, request: PackRequest, outcome: Composition
+    ) -> PackingSession:
+        return self._session_from_composition(request, outcome)
+
+    def _session_from_composition(
+        self, request: PackRequest, outcome: Composition
+    ) -> PackingSession:
+        if outcome.root_binding is None or outcome.policy is None:
+            raise InvalidContextRequest("A scoped composition is required")
+        coverage: dict[str, tuple[tuple[int, int], ...]] = {}
+        for fragment in outcome.fragments:
+            key = f"{fragment.path}@{fragment.digest}"
+            coverage[key] = (*coverage.get(key, ()), (fragment.start_line, fragment.end_line))
+        return PackingSession(
+            task=TaskProjection(
+                task_id=request.task_id,
+                query=request.query,
+                task_specification=request.task_specification,
+                system_instructions=request.system_instructions,
+                level=request.level,
+                output_paths=request.output_paths,
+            ),
+            config=self.packing_config,
+            model=outcome.model,
+            thinking=outcome.thinking,
+            output_tokens=outcome.output_tokens,
+            root_binding=outcome.root_binding,
+            policy=outcome.policy,
+            revisions=outcome.revisions,
+            fragments={
+                fragment.fragment_id: FragmentRef(
+                    fragment_id=fragment.fragment_id,
+                    path=fragment.path,
+                    start_line=fragment.start_line,
+                    end_line=fragment.end_line,
+                    digest=fragment.digest,
+                    kind=fragment.kind,
+                )
+                for fragment in outcome.fragments
+            },
+            coverage=coverage,
+            candidates=outcome.candidates,
+            relations=tuple(outcome.relations),
+            cumulative_units=outcome.cumulative_units,
+            file_chars={
+                fragment.path: sum(
+                    len(item.text) for item in outcome.fragments if item.path == fragment.path
+                )
+                for fragment in outcome.fragments
+            },
+        )
 
     def open_task(
         self, request: PackRequest
@@ -230,7 +325,15 @@ class ContextPacker:
         return result, session
 
     # -- initial composition ----------------------------------------
-    def _compose(self, request: PackRequest) -> tuple[PackResult, Composition | None]:
+    def _compose(
+        self,
+        request: PackRequest,
+        *,
+        scan_paths: frozenset[str] | None = None,
+        read_filter=None,
+        graph: DependencyGraph | None = None,
+        output_cap: int | None = None,
+    ) -> tuple[PackResult, Composition | None]:
         if not isinstance(request, PackRequest):
             raise InvalidContextRequest("A packed context request is required")
         scope = (
@@ -238,9 +341,10 @@ class ContextPacker:
             if request.output_paths is not None
             else None
         )
+        effective_output = self._effective_output_tokens(request, output_cap)
         counter_state = _CounterState(self.token_counter)
         try:
-            envelope = self._normalize_envelope(request.envelope)
+            envelope = self._normalize_envelope(request.envelope, output_tokens=effective_output)
         except UnsupportedLLMRequest:
             raise InvalidContextRequest("Unsupported packing envelope") from None
 
@@ -251,11 +355,12 @@ class ContextPacker:
             rows=(),
             model=envelope.model,
             thinking=envelope.thinking,
-            output_tokens=self.packing_config.output_tokens,
+            output_tokens=effective_output,
             tools=envelope.tools,
             replay=envelope.replay,
             response_format=envelope.response_format,
             counter_state=counter_state,
+            revisions=request.editable_revisions,
         )
         failing = self._section_failures(preflight.measurement)
         if failing or preflight.measurement.total_tokens > self.packing_config.total_tokens:
@@ -278,20 +383,41 @@ class ContextPacker:
 
         batch = self._cache.begin_batch() if self._cache is not None else None
         try:
-            result, outcome = self.retriever.rank_checked(
-                RetrievalRequest(query=request.query),
-                allowed_paths=scope,
-                on_ranked=lambda ranked, scan, graph, selected: self._select(
-                    request,
-                    ranked,
-                    scan,
-                    graph,
-                    selected,
-                    envelope=envelope,
-                    counter_state=counter_state,
-                    batch=batch,
-                ),
-            )
+            if scan_paths is None and read_filter is None and graph is None:
+                result, outcome = self.retriever.rank_checked(
+                    RetrievalRequest(query=request.query),
+                    allowed_paths=scope,
+                    on_ranked=lambda ranked, scan, ranked_graph, selected: self._select(
+                        request,
+                        ranked,
+                        scan,
+                        ranked_graph,
+                        selected,
+                        envelope=envelope,
+                        counter_state=counter_state,
+                        batch=batch,
+                        output_tokens=effective_output,
+                    ),
+                )
+            else:
+                result, outcome = self.retriever.rank_checked(
+                    RetrievalRequest(query=request.query),
+                    allowed_paths=scope,
+                    scan_paths=scan_paths,
+                    read_filter=read_filter,
+                    graph=graph,
+                    on_ranked=lambda ranked, scan, ranked_graph, selected: self._select(
+                        request,
+                        ranked,
+                        scan,
+                        ranked_graph,
+                        selected,
+                        envelope=envelope,
+                        counter_state=counter_state,
+                        batch=batch,
+                        output_tokens=effective_output,
+                    ),
+                )
         except ContextScanError:
             return (
                 self._failure(
@@ -344,8 +470,14 @@ class ContextPacker:
         tools: tuple[dict[str, Any], ...]
         replay: tuple[dict[str, Any], ...]
         response_format: dict[str, Any] | None
+        output_tokens: int = 0
 
-    def _normalize_envelope(self, envelope: PackEnvelope) -> "_EnvelopeView":
+    def _normalize_envelope(
+        self, envelope: PackEnvelope, *, output_tokens: int | None = None
+    ) -> "_EnvelopeView":
+        selected_output = (
+            self.packing_config.output_tokens if output_tokens is None else output_tokens
+        )
         model = envelope.model or self.default_model
         thinking = envelope.thinking or (
             "enabled" if self.default_thinking else "disabled"
@@ -361,7 +493,7 @@ class ContextPacker:
             tools=envelope.tools or None,
             response_format=envelope.response_format,
             thinking=thinking,  # type: ignore[arg-type]
-            output_cap=self.packing_config.output_tokens,
+            output_cap=selected_output,
             max_output_tokens=None,
         )
         return self._EnvelopeView(
@@ -370,7 +502,19 @@ class ContextPacker:
             tools=envelope.tools,
             replay=envelope.replay,
             response_format=envelope.response_format,
+            output_tokens=selected_output,
         )
+
+    def _effective_output_tokens(
+        self, request: PackRequest, output_cap: int | None
+    ) -> int:
+        candidates = [
+            self.packing_config.output_tokens,
+            request.output_tokens,
+            output_cap,
+        ]
+        bounded = [value for value in candidates if value is not None]
+        return max(1, min(bounded))
 
     @staticmethod
     def _validate_replay(replay: Sequence[Mapping[str, Any]], thinking: str) -> None:
@@ -433,6 +577,7 @@ class ContextPacker:
         replay: Sequence[Mapping[str, Any]],
         response_format: Mapping[str, Any] | None,
         counter_state: _CounterState,
+        revisions: Sequence[tuple[str, str]] = (),
     ) -> _Assembly:
         task_block = f"<task_specification>\n{task}\n</task_specification>"
         map_block = (
@@ -442,9 +587,19 @@ class ContextPacker:
             if rows
             else ""
         )
+        revision_block = (
+            "<editable_revisions>\n"
+            + "\n".join(f"{path} {revision}" for path, revision in revisions)
+            + "\n</editable_revisions>"
+            if revisions
+            else ""
+        )
         source_block = (
-            "<source_fragments>\n" + render_source(units) + "\n</source_fragments>"
-            if units
+            "<source_fragments>\n"
+            + render_source(units)
+            + (f"\n{revision_block}" if revision_block else "")
+            + "\n</source_fragments>"
+            if units or revision_block
             else ""
         )
         user_content = "\n".join(
@@ -519,6 +674,13 @@ class ContextPacker:
         )
 
     def _section_limits(self) -> dict[str, int]:
+        tool_tokens = self.packing_config.tool_tokens
+        if self._workflow_tool_tokens is not None:
+            available = max(
+                0,
+                self.packing_config.total_tokens - self.packing_config.output_tokens,
+            )
+            tool_tokens = max(tool_tokens, min(self._workflow_tool_tokens, available))
         return {
             "system": self.packing_config.system_tokens,
             "task": self.packing_config.task_tokens,
@@ -526,7 +688,7 @@ class ContextPacker:
                 self.packing_config.map_tokens, self.context_config.map_tokens_max
             ),
             "source": self.packing_config.source_tokens,
-            "tool": self.packing_config.tool_tokens,
+            "tool": tool_tokens,
         }
 
     def _section_failures(self, measurement: TokenMeasurement) -> tuple[str, ...]:
@@ -549,7 +711,11 @@ class ContextPacker:
         envelope: "_EnvelopeView",
         counter_state: _CounterState,
         batch=None,
+        output_tokens: int | None = None,
     ) -> Composition:
+        selected_output = (
+            self.packing_config.output_tokens if output_tokens is None else output_tokens
+        )
         scope = (
             frozenset(request.output_paths)
             if request.output_paths is not None
@@ -577,7 +743,38 @@ class ContextPacker:
 
         required: list[SourceUnit] = []
         if request.level == "l1":
-            if request.required_symbols:
+            if request.required_paths or request.forced_fragments:
+                for path in request.required_paths:
+                    if scope is not None and path not in scope:
+                        return self._select_failure(
+                            request,
+                            REASON_REQUIRED_SOURCE_UNAVAILABLE,
+                            "required_path_outside_scope",
+                            envelope,
+                        )
+                    unit = catalog.complete_unit_for_path(path)
+                    if unit is None:
+                        return self._select_failure(
+                            request,
+                            REASON_REQUIRED_SOURCE_UNAVAILABLE,
+                            "required_target",
+                            envelope,
+                        )
+                    required.append(unit)
+                if request.forced_fragments:
+                    forced_units: list[SourceUnit] = []
+                    for ref in request.forced_fragments:
+                        forced = self._rematerialize(catalog, [ref], ref.kind)
+                        if forced is None:
+                            return self._select_failure(
+                                request,
+                                REASON_SOURCE_CHANGED,
+                                "forced_fragment_stale",
+                                envelope,
+                            )
+                        forced_units.extend(forced)
+                    required.extend(forced_units)
+            elif request.required_symbols:
                 for selector in request.required_symbols:
                     if scope is not None and selector.path not in scope:
                         return self._select_failure(
@@ -637,11 +834,12 @@ class ContextPacker:
             rows=(),
             model=envelope.model,
             thinking=envelope.thinking,
-            output_tokens=self.packing_config.output_tokens,
+            output_tokens=selected_output,
             tools=envelope.tools,
             replay=envelope.replay,
             response_format=envelope.response_format,
             counter_state=counter_state,
+            revisions=request.editable_revisions,
         )
         if normalized_required:
             reason = self._fit_failure(
@@ -685,11 +883,12 @@ class ContextPacker:
                 rows=trial_rows,
                 model=envelope.model,
                 thinking=envelope.thinking,
-                output_tokens=self.packing_config.output_tokens,
+                output_tokens=selected_output,
                 tools=envelope.tools,
                 replay=envelope.replay,
                 response_format=envelope.response_format,
                 counter_state=counter_state,
+                revisions=request.editable_revisions,
             )
             if self._fits(trial, units=normalized_required, rows=trial_rows):
                 rows = trial_rows
@@ -698,7 +897,7 @@ class ContextPacker:
                 omitted.append(PackOmission(reason="map_limit", path=row["path"]))
 
         if request.level == "l0":
-            if not rows:
+            if not rows and not request.allow_empty_map:
                 return self._select_failure(
                     request,
                     REASON_MAP_UNAVAILABLE,
@@ -759,11 +958,12 @@ class ContextPacker:
                 rows=rows,
                 model=envelope.model,
                 thinking=envelope.thinking,
-                output_tokens=self.packing_config.output_tokens,
+                output_tokens=selected_output,
                 tools=envelope.tools,
                 replay=envelope.replay,
                 response_format=envelope.response_format,
                 counter_state=counter_state,
+                revisions=request.editable_revisions,
             )
             if self._fits(
                 trial,
@@ -882,7 +1082,7 @@ class ContextPacker:
             cumulative_units=self._units_bytes(units),
             model=envelope.model,
             thinking=envelope.thinking,
-            output_tokens=self.packing_config.output_tokens,
+            output_tokens=envelope.output_tokens,
         )
 
     def _select_failure(
@@ -905,11 +1105,12 @@ class ContextPacker:
                 rows=(),
                 model=envelope.model,
                 thinking=envelope.thinking,
-                output_tokens=self.packing_config.output_tokens,
+                output_tokens=envelope.output_tokens,
                 tools=envelope.tools,
                 replay=envelope.replay,
                 response_format=envelope.response_format,
                 counter_state=counter_state,
+                revisions=request.editable_revisions,
             ).measurement
         result = self._failure(
             request,
@@ -923,7 +1124,7 @@ class ContextPacker:
             result=result,
             model=envelope.model,
             thinking=envelope.thinking,
-            output_tokens=self.packing_config.output_tokens,
+            output_tokens=envelope.output_tokens,
         )
 
     # -- selection helpers -------------------------------------------
@@ -1208,6 +1409,8 @@ class ContextPacker:
         request: ExpansionRequest,
         *,
         envelope: PackEnvelope | None = None,
+        scan_paths: frozenset[str] | None = None,
+        read_filter=None,
     ) -> PackResult:
         if not isinstance(session, PackingSession) or not session.open:
             raise InvalidContextRequest("A live packing session is required")
@@ -1236,7 +1439,9 @@ class ContextPacker:
         counter_state = _CounterState(self.token_counter)
         batch = self._cache.begin_batch() if self._cache is not None else None
         try:
-            with self.repository.scan_retrieval_sources() as scan:
+            with self.repository.scan_retrieval_sources(
+                paths=scan_paths, read_filter=read_filter
+            ) as scan:
                 catalog = PackingCatalog(
                     scan,
                     allowed_paths=scope,

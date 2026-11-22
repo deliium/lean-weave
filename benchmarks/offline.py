@@ -235,6 +235,7 @@ def write_operator_config(
     *,
     extra_workflow: Mapping[str, Any] | None = None,
     write_allow: Sequence[str] | None = None,
+    context_mode: str | None = None,
 ) -> Path:
     """Write a trusted external operator config for the fixture case."""
 
@@ -270,6 +271,8 @@ def write_operator_config(
             "checks": checks,
         },
     }
+    if context_mode is not None:
+        payload["context"] = {"workflow_mode": context_mode}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     log.debug(
@@ -452,6 +455,7 @@ def prepare_case(
     *,
     write_allow: Sequence[str] | None = None,
     extra_workflow: Mapping[str, Any] | None = None,
+    context_mode: str | None = None,
 ) -> OfflineCase:
     origin = materialize(case_id, tmp_path / "origin").root
     manifest = load_manifest(case_id)
@@ -460,6 +464,7 @@ def prepare_case(
         manifest,
         write_allow=write_allow,
         extra_workflow=extra_workflow,
+        context_mode=context_mode,
     )
     shadow = ContentShadow.from_tree(origin)
     log.debug("[Offline.prepare] id=%s head=%s", case_id, manifest.expected_head[:12])

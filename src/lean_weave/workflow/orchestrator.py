@@ -22,6 +22,7 @@ from lean_weave.contracts import (
 )
 from lean_weave.errors import (
     BudgetExceededError,
+    ContextPreparationError,
     DependencyUnavailable,
     InvalidTransition,
     PlanValidationError,
@@ -115,6 +116,7 @@ class MinimalWorkflowOrchestrator:
         binding_extra: BindingFn | None = None,
         cancel_check: Callable[[], bool] | None = None,
         authority_digest: str | None = None,
+        context_lifecycle: Any | None = None,
     ) -> None:
         if not checkpoint_capability(state_store):
             raise DependencyUnavailable("StateStore cannot provide atomic workflow checkpoints")
@@ -137,6 +139,7 @@ class MinimalWorkflowOrchestrator:
         self._binding_extra = binding_extra
         self._cancel_check = cancel_check
         self._authority_digest = authority_digest
+        self._context_lifecycle = context_lifecycle
         self._state: FeatureState | None = None
         self._control: ControlRecord | None = None
 
@@ -161,6 +164,8 @@ class MinimalWorkflowOrchestrator:
         )
         self._store.create_checkpoint(state, control)  # type: ignore[attr-defined]
         self._state, self._control = state, control
+        if self._context_lifecycle is not None:
+            self._context_lifecycle.bind_feature(feature_id)
         log.info(
             "[Orchestrator.run] feature=%s path=detailed stage=plan mode=%s",
             feature_id,
@@ -193,12 +198,16 @@ class MinimalWorkflowOrchestrator:
         )
         self._store.create_checkpoint(state, control)  # type: ignore[attr-defined]
         self._state, self._control = state, control
+        if self._context_lifecycle is not None:
+            self._context_lifecycle.bind_feature(feature_id)
         log.info("[Orchestrator.run] feature=%s path=simple stage=implement", feature_id)
         return self._drive()
 
     def resume(self, feature_id: str, decision: Any | None = None) -> FeatureState:
         envelope = self._store.load_checkpoint(normalize_feature_id(feature_id))  # type: ignore[attr-defined]
         self._state, self._control = envelope.state, envelope.control
+        if self._context_lifecycle is not None:
+            self._context_lifecycle.bind_feature(normalize_feature_id(feature_id))
         if self._state.stage in {Stage.DONE, Stage.FAILED}:
             log.info(
                 "[Orchestrator.resume] feature=%s outcome=terminal stage=%s",
@@ -328,32 +337,68 @@ class MinimalWorkflowOrchestrator:
         if control is not None:
             control.inflight_stage = Stage.PLAN.value
             self._persist()
-        bundle = self._context.build("plan", state)
+        bundle = None
         fragments = load_instructions("plan", self._instructions.get("plan"))
-        request = build_plan_request(
-            bundle,
-            instructions=fragments,
-            approved_paths=sorted(policy.approved_paths),
-        )
-        outcome = run_tool_loop(
-            self._provider,
-            self._budget(),
-            feature_id=state.feature_id,
-            stage="plan",
-            scope=PLAN_SCOPE,
-            messages=request.messages,
-            tool_schemas=None,
-            dispatch=None,
-            max_rounds=1,
-            max_calls_per_batch=1,
-            output_cap=self._output_cap,
-            model=self._model,
-            thinking=self._thinking,
-            response_format=request.response_format,
-            cancel_check=self._cancel_check,
-        )
+        adapter = self._context_lifecycle
+        prepared = None
+        if adapter is not None:
+            try:
+                prepared = adapter.prepare_plan(
+                    state,
+                    approved_paths=sorted(policy.approved_paths),
+                    fragments=fragments,
+                )
+            except ContextPreparationError as exc:
+                adapter.refuse(exc)
+                self._context_refusal(exc)
+                return
+            request = prepared.request
+            outcome = run_tool_loop(
+                self._provider,
+                self._budget(),
+                feature_id=state.feature_id,
+                stage="plan",
+                scope=PLAN_SCOPE,
+                messages=[],
+                tool_schemas=None,
+                dispatch=None,
+                max_rounds=1,
+                max_calls_per_batch=1,
+                output_cap=prepared.output_cap,
+                model=self._model,
+                thinking=self._thinking,
+                response_format=request.get("response_format"),
+                cancel_check=self._cancel_check,
+                round_builder=lambda _suffix: request,
+            )
+        else:
+            bundle = self._context.build("plan", state)
+            request = build_plan_request(
+                bundle,
+                instructions=fragments,
+                approved_paths=sorted(policy.approved_paths),
+            )
+            outcome = run_tool_loop(
+                self._provider,
+                self._budget(),
+                feature_id=state.feature_id,
+                stage="plan",
+                scope=PLAN_SCOPE,
+                messages=request.messages,
+                tool_schemas=None,
+                dispatch=None,
+                max_rounds=1,
+                max_calls_per_batch=1,
+                output_cap=self._output_cap,
+                model=self._model,
+                thinking=self._thinking,
+                response_format=request.response_format,
+                cancel_check=self._cancel_check,
+            )
         if outcome.overage:
             self._accumulate_metrics(outcome)
+            if prepared is not None and adapter is not None:
+                adapter.finish_stage("overage")
             log.warning(
                 "[Workflow.budget] feature=%s scope=plan outcome=overage code=%s",
                 state.feature_id,
@@ -362,11 +407,31 @@ class MinimalWorkflowOrchestrator:
             raise WorkflowBudgetExceeded(FEATURE_TOKEN_OVERAGE)
         if outcome.cancelled:
             self._accumulate_metrics(outcome)
+            if prepared is not None and adapter is not None:
+                adapter.finish_stage("cancelled")
             self._terminal(WorkflowStatus.CANCELLED, "cancelled")
             return
         if outcome.exhausted:
             self._accumulate_metrics(outcome)
+            if prepared is not None and adapter is not None:
+                adapter.finish_stage("exhausted")
             self._terminal(WorkflowStatus.FAILED, "plan_call_unavailable")
+            return
+        if outcome.refused:
+            self._accumulate_metrics(outcome)
+            if adapter is not None and prepared is not None:
+                adapter.refuse(
+                    ContextPreparationError(
+                        outcome.refusal_category or "context_insufficient",
+                        outcome.refusal_reason or "context_refused",
+                    )
+                )
+            self._context_refusal(
+                ContextPreparationError(
+                    outcome.refusal_category or "context_insufficient",
+                    outcome.refusal_reason or "context_refused",
+                )
+            )
             return
         self._accumulate_metrics(outcome)
         response = {
@@ -378,11 +443,15 @@ class MinimalWorkflowOrchestrator:
         baseline_after = self._capture_baseline()
         if baseline_after != baseline_before:
             log.warning("[Orchestrator.plan] outcome=baseline_drift")
+            if prepared is not None and adapter is not None:
+                adapter.finish_stage("baseline_drift")
             self._terminal(WorkflowStatus.FAILED, "baseline_drift")
             return
         state.plan = plan
         state.active_task_id = None
         transition(state, "planned")
+        if prepared is not None and adapter is not None:
+            adapter.finish_stage("planned")
         if control is not None:
             control.inflight_stage = None
         if control is not None and control.mode is ExecutionMode.REVIEW:
@@ -554,14 +623,80 @@ class MinimalWorkflowOrchestrator:
         if tools is None:
             self._terminal(WorkflowStatus.FAILED, "approval_required")
             return
-        bundle = self._context.build(stage, state)  # type: ignore[arg-type]
         fragments = load_instructions(stage, self._instructions.get(stage))
-        messages = list(bundle.get("messages") or [])
-        if fragments:
-            messages = _append_trusted_instructions(messages, fragments)
-        bound = tools.bind_task(task.files).with_effects(
-            self._mark_patch_effect, self._clear_effect
-        )
+        adapter = self._context_lifecycle
+        prepared = None
+        read_override = None
+        round_builder = None
+        messages: list[Any] = []
+        output_cap = self._output_cap
+        fallback_read_paths: Sequence[str] | None = None
+        if adapter is not None:
+            try:
+                prepared = adapter.prepare_tool_stage(
+                    stage=stage,
+                    state=state,
+                    task=task,
+                    schemas=tools.schemas(),
+                    fragments=fragments,
+                )
+            except ContextPreparationError as exc:
+                fallback_cap = adapter.fallback_output_cap
+                fallback_paths = adapter.fallback_read_paths
+                adapter.refuse(exc)
+                if not (
+                    stage == "implement"
+                    and adapter.fallback_allowed
+                    and exc.reason == "no_relevant_source"
+                ):
+                    self._context_refusal(exc)
+                    return
+                output_cap = fallback_cap
+                fallback_read_paths = fallback_paths
+                log.info(
+                    "[Orchestrator.%s] feature=%s outcome=v1_fallback reason=%s",
+                    stage,
+                    state.feature_id,
+                    exc.reason,
+                )
+            else:
+                read_override = prepared.read_override
+                round_builder = prepared.round_builder
+                output_cap = prepared.output_cap
+        if prepared is None:
+            bundle = self._context.build(stage, state)  # type: ignore[arg-type]
+            if adapter is not None and fallback_read_paths is not None:
+                estimate = bundle.get("estimated_tokens")
+                if (
+                    isinstance(estimate, int)
+                    and estimate + output_cap
+                    > adapter.config.context.packing.total_tokens
+                ):
+                    self._context_refusal(
+                        ContextPreparationError(
+                            "budget_exhausted", "fallback_envelope_over_budget"
+                        )
+                    )
+                    return
+            messages = list(bundle.get("messages") or [])
+            if fragments:
+                messages = _append_trusted_instructions(messages, fragments)
+
+        def after_patch(operation_id: str, committed: bool = True) -> None:
+            self._clear_effect(operation_id, committed)
+            if committed and prepared is not None and adapter is not None:
+                adapter.note_patch(sorted(task.files))
+
+        bound = tools.bind_task(
+            task.files,
+            read_files=(
+                fallback_read_paths
+                if prepared is None
+                else prepared.read_paths
+            ),
+        ).with_effects(self._mark_patch_effect, after_patch)
+        if read_override is not None:
+            bound = bound.with_read_override(read_override)
         if self._control is not None:
             self._control.inflight_stage = stage
             self._persist()
@@ -576,15 +711,41 @@ class MinimalWorkflowOrchestrator:
             dispatch=bound.dispatch,
             max_rounds=self._config.max_tool_rounds,
             max_calls_per_batch=self._config.max_tool_calls_per_batch,
-            output_cap=self._output_cap,
+            output_cap=output_cap,
             model=self._model,
             thinking=self._thinking,
             cancel_check=self._cancel_check,
+            round_builder=round_builder,
         )
         self._accumulate_metrics(outcome)
+        if outcome.refused:
+            if prepared is not None and adapter is not None:
+                adapter.refuse(
+                    ContextPreparationError(
+                        outcome.refusal_category or "context_insufficient",
+                        outcome.refusal_reason or "context_refused",
+                    )
+                )
+            control = self._control
+            if control is not None and control.pending_effect is not None:
+                if control.pending_effect.confirmed:
+                    control.pending_effect = None
+                    self._persist()
+                else:
+                    self._interrupt("unresolved_effect")
+                    return
+            self._context_refusal(
+                ContextPreparationError(
+                    outcome.refusal_category or "context_insufficient",
+                    outcome.refusal_reason or "context_refused",
+                )
+            )
+            return
         if outcome.overage:
             raise WorkflowBudgetExceeded(FEATURE_TOKEN_OVERAGE)
         if outcome.cancelled:
+            if prepared is not None:
+                prepared.finish("cancelled")
             control = self._control
             if (
                 control is not None
@@ -595,6 +756,8 @@ class MinimalWorkflowOrchestrator:
             self._terminal(WorkflowStatus.CANCELLED, "cancelled")
             return
         if outcome.unconfirmed:
+            if prepared is not None:
+                prepared.finish("unconfirmed")
             effect = None
             if self._control is None or self._control.pending_effect is None:
                 effect = PendingEffect(
@@ -607,6 +770,8 @@ class MinimalWorkflowOrchestrator:
             self._interrupt("committed_unconfirmed", effect=effect)
             return
         if outcome.exhausted:
+            if prepared is not None:
+                prepared.finish("exhausted")
             self._terminal(WorkflowStatus.FAILED, "task_loop_exhausted")
             return
         if self._control is not None and self._control.pending_effect is not None:
@@ -614,6 +779,8 @@ class MinimalWorkflowOrchestrator:
             if control.pending_effect.confirmed:
                 control.pending_effect = None
             else:
+                if prepared is not None:
+                    prepared.finish("unresolved_effect")
                 self._interrupt("unresolved_effect")
                 return
         if self._control is not None:
@@ -625,6 +792,8 @@ class MinimalWorkflowOrchestrator:
         event = "task_done" if stage == "implement" else "requeue"
         transition(state, event)
         self._persist()
+        if prepared is not None:
+            prepared.finish("done")
         log.info(
             "[Orchestrator.%s] feature=%s task=%s outcome=done calls=%s",
             stage,
@@ -650,6 +819,24 @@ class MinimalWorkflowOrchestrator:
     def _budget_terminal(self, exc: WorkflowBudgetExceeded) -> FeatureState:
         self._terminal(WorkflowStatus.BUDGET_EXHAUSTED, _reason(str(exc), "budget_exhausted"))
         return self._require_state()
+
+    def _context_refusal(self, exc: ContextPreparationError) -> None:
+        """Route a local context refusal through existing typed outcomes."""
+
+        if exc.category == "budget_exhausted":
+            raise WorkflowBudgetExceeded(exc.reason)
+        reason = (
+            "context_stale"
+            if exc.category == "context_stale"
+            else "context_insufficient"
+        )
+        log.warning(
+            "[Orchestrator.context] feature=%s outcome=refused category=%s reason=%s",
+            self._require_state().feature_id,
+            exc.category,
+            exc.reason,
+        )
+        self._terminal(WorkflowStatus.FAILED, reason)
 
     def _accumulate_metrics(self, outcome: ToolLoopOutcome) -> None:
         metrics = self._require_state().metrics

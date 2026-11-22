@@ -48,6 +48,40 @@ A linked worktree isolates Git content; it is **not** an OS execution sandbox.
 Public acceptance checks must be trusted external data-only commands. There is
 no public workspace-code isolation backend in MVP 1.
 
+## V2 workflow context opt-in
+
+The trusted operator config may select the context mode for feature execution:
+
+```yaml
+context:
+  workflow_mode: v2   # v1 (default) | v2 | v2-with-v1-fallback
+```
+
+- `v1` keeps the original `ContextProvider.build` behavior and performs no V2
+  cache, index, map, or packing construction.
+- `v2` supplies each stage with its own scoped evidence. Planning gets approved
+  paths and compact map metadata without source bodies. Implement and retry get
+  the active task's complete units, direct dependencies, and counted raw-byte
+  edit revisions. Verification and diagnosis stay deterministic.
+- `v2-with-v1-fallback` only falls back to V1 rendering for an implement attempt
+  whose sole safe pre-send reason is `no_relevant_source`. Budget, authority,
+  stale, incomplete, guard, and provider failures never fall back.
+
+The selected mode is frozen into the feature authority digest. Resuming a V2
+feature with a different mode, packing/retrieval/cache setting, read policy, or
+model cap is refused as authority drift before another dispatch. **Rollback is
+choosing `v1` for new features**; do not swap the mode on an active V2 feature.
+
+Expansion is only through the existing `read_range` / `read_symbol` tools.
+Accepted fragments appear in the next freshly assembled source block; duplicate
+or fully covered requests return `no_change`. Confirmed owned edits rebuild
+current source without resetting expansion, source, call, or token caps. Stale
+or unproven source is refused rather than replaying an old block.
+
+V2 context is checkout-local. It does not enable peer cache reuse, implicit
+index/cache maintenance, new write authority, or background work. Missing or
+disabled index/cache services degrade only the optimization.
+
 ## Lifecycle
 
 ```bash

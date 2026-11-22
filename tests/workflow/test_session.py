@@ -244,3 +244,58 @@ def test_durable_cancel_wins_over_resume(tmp_path: Path):
     assert cancelled.status == "cancelled"
     assert cancelled.cancel_requested is False
     assert [request["stage"] for request in provider.requests] == ["plan"]
+
+
+def test_v2_authority_digest_is_versioned_and_v1_stays_legacy(tmp_path: Path):
+    from lean_weave.app import AppContext
+    from lean_weave.config import AppConfig, load_config
+    from lean_weave.workflow.lifecycle import authority_digest
+    from lean_weave.workflow.session import FeatureSession
+
+    root = _repo(tmp_path)
+    parser = _parser(tmp_path)
+    config_path = _operator_config(tmp_path, parser)
+    session = FeatureSession(source_cwd=root)
+
+    v1 = load_config(config_path, required=True).config
+    approval = session._build_approval(root, v1, config_path)
+    v1_digest = session._authority_digest(v1, approval, ("parse",))
+    legacy = authority_digest(
+        write_allow=approval.write_allow,
+        checks=[
+            {
+                "id": check.id,
+                "executable": check.executable,
+                "argv": list(check.argv),
+                "timeout_s": check.timeout_s,
+                "output_bytes_max": check.output_bytes_max,
+                "runs_workspace_code": check.runs_workspace_code,
+            }
+            for check in approval.checks
+        ],
+        check_ids=("parse",),
+        state_dir=v1.workflow.state_dir,
+        max_retries=v1.workflow.max_retries,
+        max_task_tokens=v1.workflow.max_task_tokens,
+        feature_token_budget=v1.workflow.feature_token_budget,
+        max_task_llm_calls=v1.workflow.max_task_llm_calls,
+    )
+    assert v1_digest == legacy
+
+    v2 = v1.model_copy(
+        update={"context": v1.context.model_copy(update={"workflow_mode": "v2"})}
+    )
+    v2_digest = session._authority_digest(v2, approval, ("parse",))
+    assert v2_digest != v1_digest
+    changed = v2.model_copy(
+        update={
+            "context": v2.context.model_copy(
+                update={
+                    "packing": v2.context.packing.model_copy(
+                        update={"source_tokens": 2048}
+                    )
+                }
+            )
+        }
+    )
+    assert session._authority_digest(changed, approval, ("parse",)) != v2_digest

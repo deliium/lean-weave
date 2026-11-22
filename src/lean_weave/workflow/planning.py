@@ -287,6 +287,21 @@ def validate_plan_payload(payload: Any, policy: PlanPolicy) -> FeaturePlan:
     return plan
 
 
+def plan_output_contract(approved_paths: Sequence[str] = ()) -> str:
+    """Stable JSON output contract shared by V1 and V2 plan requests."""
+
+    paths = sorted({path for path in approved_paths if isinstance(path, str)})
+    directive = [
+        "Return exactly one JSON object with keys:",
+        "goal, settings, reconciliation, tasks, commit_checkpoints.",
+        "Each task object has id, title, description, files, depends_on; "
+        "status must be omitted or pending.",
+        "Use only these caller-approved existing files: " + (", ".join(paths) or "(none)"),
+        "Do not include prose outside the JSON object.",
+    ]
+    return "PLAN OUTPUT CONTRACT:\n" + "\n".join(directive)
+
+
 def build_plan_request(
     bundle: ContextBundle,
     *,
@@ -315,15 +330,7 @@ def build_plan_request(
         system_text = f"{system_text}\n\n{block}"
     user_text = user["content"]
     paths = sorted({path for path in approved_paths if isinstance(path, str)})
-    directive = [
-        "Return exactly one JSON object with keys:",
-        "goal, settings, reconciliation, tasks, commit_checkpoints.",
-        "Each task object has id, title, description, files, depends_on; "
-        "status must be omitted or pending.",
-        "Use only these caller-approved existing files: " + (", ".join(paths) or "(none)"),
-        "Do not include prose outside the JSON object.",
-    ]
-    user_text = f"{user_text}\n\nPLAN OUTPUT CONTRACT:\n" + "\n".join(directive)
+    user_text = f"{user_text}\n\n{plan_output_contract(paths)}"
     request = PlanRequest(
         messages=[
             {"role": "system", "content": system_text},

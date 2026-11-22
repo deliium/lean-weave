@@ -150,16 +150,26 @@ class ContextRetriever:
         *,
         allowed_paths: frozenset[str] | None = None,
         on_ranked: RankingCallback | None = None,
+        scan_paths: frozenset[str] | None = None,
+        read_filter: Callable[[str], bool] | None = None,
+        graph: "DependencyGraph | None" = None,
     ) -> tuple[RetrievalResult, object | None]:
         """Internal packing hook: rank within an optional output scope.
 
         The callback receives detached inputs *before* the final witness check.
         Its return value is discarded when the witness changed, so callers must
-        not retain a scanner or publish partial data.
+        not retain a scanner or publish partial data.  Workflow scans may pass
+        an explicit path scope, executor read filter, and a precomputed scoped
+        graph; preview calls leave them unset.
         """
 
         return self._execute(
-            request, allowed_paths=allowed_paths, on_ranked=on_ranked
+            request,
+            allowed_paths=allowed_paths,
+            on_ranked=on_ranked,
+            scan_paths=scan_paths,
+            read_filter=read_filter,
+            graph=graph,
         )
 
     def _execute(
@@ -168,9 +178,13 @@ class ContextRetriever:
         *,
         allowed_paths: frozenset[str] | None = None,
         on_ranked: RankingCallback | None = None,
+        scan_paths: frozenset[str] | None = None,
+        read_filter: Callable[[str], bool] | None = None,
+        graph: "DependencyGraph | None" = None,
     ) -> tuple[RetrievalResult, object | None]:
         if not isinstance(request, RetrievalRequest):
             raise InvalidContextRequest("Retrieval query was rejected")
+        scoped = scan_paths is not None
         config = self.repository.config.retrieval
         top_k = request.top_k if request.top_k is not None else config.top_k
         weights = effective_weights(config.weights, request.task_kind)
@@ -179,7 +193,9 @@ class ContextRetriever:
         truncated = False
 
         try:
-            scan_cm = self.repository.scan_retrieval_sources()
+            scan_cm = self.repository.scan_retrieval_sources(
+                paths=scan_paths, read_filter=read_filter
+            )
         except ContextScanError:
             log.warning("[Context.retriever] source unavailable")
             return self._unavailable(request, top_k=top_k), None
@@ -232,8 +248,7 @@ class ContextRetriever:
                     )
                     return result, outcome
 
-                graph = None
-                if self.load_graph is not None:
+                if graph is None and self.load_graph is not None:
                     try:
                         graph = self.load_graph(scan)
                     except CodeIndexError as exc:
@@ -255,7 +270,7 @@ class ContextRetriever:
                     self._cache.begin_batch() if self._cache is not None else None
                 )
                 cached = None
-                if self._retrieval_cache is not None:
+                if self._retrieval_cache is not None and not scoped:
                     cached = self._retrieval_cache.load(
                         request,
                         top_k=top_k,
@@ -314,7 +329,7 @@ class ContextRetriever:
                     degraded_reasons=_ordered_degraded(degraded),
                     truncated=truncated,
                 )
-                if self._retrieval_cache is not None:
+                if self._retrieval_cache is not None and not scoped:
                     self._retrieval_cache.publish(
                         request,
                         top_k=top_k,

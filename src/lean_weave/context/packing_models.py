@@ -131,7 +131,8 @@ class PackRequest(_Model):
     """Explicit whole-checkout packing preview request.
 
     ``output_paths`` narrows what may be emitted; it does not narrow the
-    whole-checkout ranking read and is not a workflow read approval.
+    whole-checkout ranking read and is not a workflow read approval.  The
+    workflow-only fields below are internal, default-preserving extensions.
     """
 
     task_id: str
@@ -142,6 +143,12 @@ class PackRequest(_Model):
     required_symbols: tuple[SymbolSelector, ...] = ()
     output_paths: tuple[str, ...] | None = None
     envelope: PackEnvelope = Field(default_factory=PackEnvelope)
+    # Private workflow extensions: no public preview behavior changes.
+    required_paths: tuple[str, ...] = ()
+    forced_fragments: tuple[FragmentRef, ...] = ()
+    editable_revisions: tuple[tuple[str, str], ...] = ()
+    allow_empty_map: bool = False
+    output_tokens: int | None = Field(default=None, gt=0)
 
     @field_validator("task_id")
     @classmethod
@@ -168,10 +175,36 @@ class PackRequest(_Model):
     def normalize_scope(cls, value: Any) -> Any:
         return _normalize_paths(value)
 
+    @field_validator("required_paths", mode="before")
+    @classmethod
+    def normalize_required(cls, value: Any) -> Any:
+        return _normalize_paths(value) or ()
+
+    @field_validator("editable_revisions", mode="before")
+    @classmethod
+    def normalize_revisions(cls, value: Any) -> Any:
+        if value is None:
+            return ()
+        result: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for path, revision in value:
+            normalized = normalize_relative_path(path)
+            if normalized in seen:
+                continue
+            if not isinstance(revision, str) or not revision:
+                raise ValueError("editable revision must be non-empty")
+            seen.add(normalized)
+            result.append((normalized, revision))
+        return tuple(result)
+
     @model_validator(mode="after")
     def validate_level_requirements(self) -> "PackRequest":
         if self.level == "l0" and self.required_symbols:
             raise ValueError("L0 packs cannot require source definitions")
+        if self.level == "l0" and (self.required_paths or self.forced_fragments):
+            raise ValueError("L0 packs cannot require source paths")
+        if self.forced_fragments and self.level != "l1":
+            raise ValueError("Forced fragments require an L1 pack")
         return self
 
 

@@ -44,6 +44,7 @@ FIXED_TOOL_NAMES = frozenset({"read_range", "read_symbol", "apply_patch"})
 
 BeforeEffect = Callable[[str, str | None, list[str]], None]
 AfterEffect = Callable[[str, bool], None]
+ReadOverride = Callable[[str, Mapping[str, Any]], "ToolCallResult"]
 
 TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     {
@@ -141,24 +142,34 @@ class WorkflowTools:
         checks_ready: bool,
         before_patch: BeforeEffect | None = None,
         after_patch: AfterEffect | None = None,
+        read_override: ReadOverride | None = None,
+        read_files: Sequence[str] | None = None,
     ) -> None:
         self.approval = approval
         self._files = frozenset(normalize_tool_path(path) for path in task_files)
+        self._read_files = (
+            self._files
+            if read_files is None
+            else frozenset(normalize_tool_path(path) for path in read_files)
+        )
         self.checks_ready = checks_ready
         self._before_patch = before_patch
         self._after_patch = after_patch
+        self._read_override = read_override
 
     @property
     def task_files(self) -> frozenset[str]:
         return self._files
 
-    def bind_task(self, files: Sequence[str], *, checks_ready: bool | None = None) -> "WorkflowTools":
+    def bind_task(self, files: Sequence[str], *, checks_ready: bool | None = None, read_files: Sequence[str] | None = None) -> "WorkflowTools":
         return WorkflowTools(
             self.approval,
             task_files=files,
             checks_ready=self.checks_ready if checks_ready is None else checks_ready,
             before_patch=self._before_patch,
             after_patch=self._after_patch,
+            read_override=self._read_override,
+            read_files=self._read_files if read_files is None else read_files,
         )
 
     def with_effects(
@@ -170,6 +181,19 @@ class WorkflowTools:
             checks_ready=self.checks_ready,
             before_patch=before_patch,
             after_patch=after_patch,
+            read_override=self._read_override,
+            read_files=self._read_files,
+        )
+
+    def with_read_override(self, read_override: ReadOverride | None) -> "WorkflowTools":
+        return WorkflowTools(
+            self.approval,
+            task_files=self._files,
+            checks_ready=self.checks_ready,
+            before_patch=self._before_patch,
+            after_patch=self._after_patch,
+            read_override=read_override,
+            read_files=self._read_files,
         )
 
     def schemas(self) -> tuple[dict[str, Any], ...]:
@@ -209,14 +233,15 @@ class WorkflowTools:
             return None
         return parsed
 
-    def _scope(self, value: Any) -> str | None:
+    def _scope(self, value: Any, *, write: bool = False) -> str | None:
         if not isinstance(value, str):
             return None
         try:
             path = normalize_tool_path(value)
         except ValueError:
             return None
-        if path not in self._files:
+        allowed = self._files if write else self._read_files
+        if path not in allowed:
             log.warning("[Workflow.tools] outcome=out_of_scope")
             return None
         return path
@@ -230,6 +255,10 @@ class WorkflowTools:
             start_line=arguments.get("start_line"),
             end_line=arguments.get("end_line"),
         )
+        if self._read_override is not None:
+            override = self._read_override("read_range", arguments)
+            if override is not None:
+                return override
         result = read_range(self.approval, request)
         if isinstance(result, ToolFailure):
             return _failure(result.status)
@@ -245,6 +274,10 @@ class WorkflowTools:
         if path is None:
             return _failure("denied")
         request = ReadSymbolRequest(path=path, name=arguments.get("name"))
+        if self._read_override is not None:
+            override = self._read_override("read_symbol", arguments)
+            if override is not None:
+                return override
         result = read_symbol(self.approval, request)
         if isinstance(result, ToolFailure):
             return _failure(result.status)
@@ -259,7 +292,7 @@ class WorkflowTools:
         if not self.checks_ready:
             log.warning("[Workflow.tools] operation=apply_patch outcome=blocked")
             return _failure("blocked")
-        path = self._scope(arguments.get("path"))
+        path = self._scope(arguments.get("path"), write=True)
         if path is None:
             return _failure("denied")
         request = ApplyPatchRequest(
