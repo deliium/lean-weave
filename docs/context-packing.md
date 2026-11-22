@@ -237,4 +237,5 @@ checkpoints are unchanged. No cleanup or migration is required.
 - [context-retrieval.md](context-retrieval.md) — ranked retrieval inputs
 - [repository-map.md](repository-map.md) — checked import graph
 - [code-index.md](code-index.md) — disposable fact cache
+- [context-cache.md](context-cache.md) — opt-in span/header reuse
 - [cli.md](cli.md) — command reference

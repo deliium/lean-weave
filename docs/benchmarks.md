@@ -112,6 +112,14 @@ Report mock-functional, local-estimate, and live DeepSeek results separately.
 Disclose missing coverage and cache/time conditions. Claim savings only against
 measured comparable results that also report correctness denominators.
 
+## Context-cache workload
+
+`uv run python -m benchmarks.context_cache --json` reports disabled,
+empty-enabled, and warm modes separately with and without a prebuilt index. It
+reports local wall/CPU time, call counters, per-kind hits, and DB bytes, with
+`llm_calls=0` and `api_tokens_measured=false`. See
+[context-cache.md](context-cache.md).
+
 ## Redaction
 
 Persisted reports store bounded counts and allowlisted metadata only. They never

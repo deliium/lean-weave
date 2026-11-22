@@ -136,6 +136,9 @@ def _build_catalogs(records: tuple[FileRecord, ...]) -> _Catalogs:
     )
 
 
+build_catalogs = _build_catalogs
+
+
 def _package_of(node: ModuleNode) -> str | None:
     if not _is_identifier_module(node.module_name) and node.module_name != "":
         return None
@@ -592,6 +595,9 @@ def _consulted_keys_for_import(
     return frozenset(keys)
 
 
+consulted_keys_for_import = _consulted_keys_for_import
+
+
 def _resolve_imports_for(
     node: ModuleNode, record: FileRecord, catalogs: _Catalogs
 ) -> tuple[ImportRelation, frozenset[str]]:
@@ -681,6 +687,9 @@ def _resolve_imports_for(
                     )
                 )
     return tuple(relations), frozenset(watched)
+
+
+resolve_imports_for = _resolve_imports_for
 
 
 def _sort_relations(
@@ -813,7 +822,7 @@ def _publish(
     return graph
 
 
-def build_graph(generation: IndexGeneration) -> DependencyGraph:
+def build_graph(generation: IndexGeneration, *, resolver=None) -> DependencyGraph:
     """Derive a full static dependency graph from one checked generation."""
 
     catalogs = _build_catalogs(generation.records)
@@ -821,7 +830,13 @@ def build_graph(generation: IndexGeneration) -> DependencyGraph:
     watchers: dict[str, frozenset[str]] = {}
     for file_id, node in catalogs.nodes.items():
         record = catalogs.records[file_id]
-        resolved, watched = _resolve_imports_for(node, record, catalogs)
+        value = None
+        if resolver is not None:
+            value = resolver(node, record, catalogs)
+        if value is not None:
+            resolved, watched = value
+        else:
+            resolved, watched = _resolve_imports_for(node, record, catalogs)
         relations.extend(resolved)
         watchers[file_id] = watched
     return _publish(
@@ -833,13 +848,16 @@ def build_graph(generation: IndexGeneration) -> DependencyGraph:
 
 
 def refresh_graph(
-    previous: DependencyGraph | None, generation: IndexGeneration
+    previous: DependencyGraph | None,
+    generation: IndexGeneration,
+    *,
+    resolver=None,
 ) -> DependencyGraph:
     """Reuse unaffected importer relations when catalogs remain compatible."""
 
     if previous is None:
         log.debug("[RepositoryMap.refresh] mode=cold")
-        return build_graph(generation)
+        return build_graph(generation, resolver=resolver)
 
     compatible = (
         previous.contract_version == GRAPH_CONTRACT_VERSION
@@ -850,7 +868,7 @@ def refresh_graph(
     )
     if not compatible:
         log.debug("[RepositoryMap.refresh] mode=rebuild reason=incompatible")
-        return build_graph(generation)
+        return build_graph(generation, resolver=resolver)
 
     if (
         previous.revision == generation.header.revision
@@ -909,7 +927,13 @@ def refresh_graph(
     for file_id in affected:
         node = catalogs.nodes[file_id]
         record = catalogs.records[file_id]
-        resolved, watched = _resolve_imports_for(node, record, catalogs)
+        value = None
+        if resolver is not None:
+            value = resolver(node, record, catalogs)
+        if value is not None:
+            resolved, watched = value
+        else:
+            resolved, watched = _resolve_imports_for(node, record, catalogs)
         reused.extend(resolved)
         watchers[file_id] = watched
 

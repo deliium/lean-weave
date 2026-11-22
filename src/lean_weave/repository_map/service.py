@@ -8,7 +8,11 @@ from pathlib import PurePosixPath
 from lean_weave.code_index import CodeIndex
 from lean_weave.context.policy import contains_secret, safe_root
 from lean_weave.context.repository import Repository, SourceScan
-from lean_weave.errors import ForbiddenContext, RepositoryMapError
+from lean_weave.context_cache.imports import ImportCache
+from lean_weave.context_cache.map_rows import MapRowCache
+from lean_weave.context_cache.models import ContextCache
+from lean_weave.context_cache.service import CachePolicy
+from lean_weave.errors import CodeIndexError, ForbiddenContext, RepositoryMapError
 from lean_weave.logging_setup import get_logger
 from lean_weave.repository_map.graph import refresh_graph
 from lean_weave.repository_map.models import (
@@ -72,14 +76,47 @@ def _public_components(name: str) -> bool:
 class RepositoryMap:
     """Sequential map service over one CodeIndex; graph memo is private."""
 
-    def __init__(self, index: CodeIndex, *, limits: MapLimits | None = None) -> None:
+    def __init__(
+        self,
+        index: CodeIndex,
+        *,
+        limits: MapLimits | None = None,
+        cache: ContextCache | None = None,
+    ) -> None:
         self._index = index
         self._limits = limits if limits is not None else MapLimits()
         self._graph: DependencyGraph | None = None
+        self._cache = cache if cache is not None and cache.enabled else None
+        self._import_cache = None
+        self._map_row_cache = None
+        if self._cache is not None:
+            policy = CachePolicy.from_context(
+                index.context_config,
+                state_dir=index.state_dir,
+                protected_paths=index.protected_paths,
+            )
+            self._import_cache = ImportCache(self._cache, policy=policy)
+            self._map_row_cache = MapRowCache(self._cache, policy=policy)
+
+    def _resolver(self, generation, batch):
+        if self._import_cache is None:
+            return None
+        self._import_cache.bind(generation.header)
+        cache = self._import_cache
+
+        def resolve(node, record, catalogs):
+            return cache.resolve(record, node, catalogs, batch=batch)
+
+        return resolve
 
     def _load(self) -> DependencyGraph:
         generation = self._index.read_generation()
-        self._graph = refresh_graph(self._graph, generation)
+        batch = self._cache.begin_batch() if self._cache is not None else None
+        self._graph = refresh_graph(
+            self._graph, generation, resolver=self._resolver(generation, batch)
+        )
+        if batch is not None and self._cache is not None:
+            self._cache.flush(batch)
         return self._graph
 
     def _copy_graph(self, graph: DependencyGraph) -> DependencyGraph:
@@ -187,8 +224,17 @@ class RepositoryMap:
         """Build a defensive graph projection from one admitted retrieval scan."""
 
         generation = self._index.read_generation_for_retrieval_scan(scan)
-        self._graph = refresh_graph(self._graph, generation)
+        batch = self._cache.begin_batch() if self._cache is not None else None
+        self._graph = refresh_graph(
+            self._graph, generation, resolver=self._resolver(generation, batch)
+        )
         projected = self._filter_retrieval_graph(self._graph, scan)
+        if batch is not None and self._cache is not None:
+            if scan.revalidate():
+                self._cache.flush(batch)
+            else:
+                batch.discard()
+                raise CodeIndexError("storage_unavailable")
         log.debug(
             "[RepositoryMap.retrieval_graph] nodes=%s symbols=%s relations=%s",
             len(projected.nodes),
@@ -291,85 +337,77 @@ class RepositoryMap:
         name = _validate_selector(selector)
         graph = self._load()
         symbols = self._resolve_symbol_group(graph, name)
-        candidates: list[tuple[str, str, str | None]] = []
-        definitions = sorted(
-            symbols,
-            key=lambda item: (
-                item.source.path,
-                item.source.start_line or 0,
-                item.source.end_line or 0,
-                item.qualified_name,
-            ),
-        )
-        for symbol in definitions:
-            long = definition_row(
-                symbol.source.path,
-                symbol.source.start_line or 0,
-                symbol.source.end_line or 0,
-                symbol.qualified_name,
-                symbol.signature,
-                kind=symbol.kind,
+        batch = self._cache.begin_batch() if self._map_row_cache is not None else None
+        try:
+            candidates: list[tuple[str, str, str | None]] = []
+            definitions = sorted(
+                symbols,
+                key=lambda item: (
+                    item.source.path,
+                    item.source.start_line or 0,
+                    item.source.end_line or 0,
+                    item.qualified_name,
+                ),
             )
-            short = definition_row(
-                symbol.source.path,
-                symbol.source.start_line or 0,
-                symbol.source.end_line or 0,
-                symbol.qualified_name,
-                symbol.signature,
-                kind=symbol.kind,
-                short=True,
-            )
-            if long is None:
-                continue
-            candidates.append((long, symbol.source.path, short))
+            for symbol in definitions:
+                long, short, _too_big = self._definition_rows(symbol, batch)
+                if long is None:
+                    continue
+                candidates.append((long, symbol.source.path, short))
 
-        import_sites = []
-        for symbol in symbols:
-            for relation in graph.symbol_references.get(symbol.symbol_id, ()):
-                import_sites.append((symbol, relation))
-        import_sites.sort(
-            key=lambda pair: (
-                pair[1].source.path,
-                pair[1].source.start_line or 0,
-                pair[1].source.end_line or 0,
-                pair[1].statement_ordinal,
-                pair[1].name_ordinal,
+            import_sites = []
+            for symbol in symbols:
+                for relation in graph.symbol_references.get(symbol.symbol_id, ()):
+                    import_sites.append((symbol, relation))
+            import_sites.sort(
+                key=lambda pair: (
+                    pair[1].source.path,
+                    pair[1].source.start_line or 0,
+                    pair[1].source.end_line or 0,
+                    pair[1].statement_ordinal,
+                    pair[1].name_ordinal,
+                )
             )
-        )
-        for symbol, relation in import_sites:
-            detail = f"{relation.spelling}"
-            if relation.alias:
-                detail = f"{relation.spelling} as {relation.alias}"
-            detail = f"{detail} -> {symbol.qualified_name}"
-            row = reference_row(
-                kind="import",
-                path=relation.source.path,
-                start=relation.source.start_line or 0,
-                end=relation.source.end_line or 0,
-                detail=detail,
-            )
-            if row is None:
-                continue
-            candidates.append((row, relation.source.path, None))
+            for symbol, relation in import_sites:
+                detail = f"{relation.spelling}"
+                if relation.alias:
+                    detail = f"{relation.spelling} as {relation.alias}"
+                detail = f"{detail} -> {symbol.qualified_name}"
+                row = reference_row(
+                    kind="import",
+                    path=relation.source.path,
+                    start=relation.source.start_line or 0,
+                    end=relation.source.end_line or 0,
+                    detail=detail,
+                )
+                if row is None:
+                    continue
+                candidates.append((row, relation.source.path, None))
 
-        # Prefix definition rows with def| — rewrite long/short already emitted.
-        rewritten: list[tuple[str, str, str | None]] = []
-        definition_count = len(definitions)
-        for index, (row, path, short) in enumerate(candidates):
-            if index < definition_count:
-                prefixed = f"def {row}"
-                prefixed_short = None if short is None else f"def {short}"
-                rewritten.append((prefixed, path, prefixed_short))
-            else:
-                rewritten.append((row, path, short))
-        result = apply_budget(rewritten, revision=graph.revision, limits=self._limits)
-        log.debug(
-            "[RepositoryMap.view] view=references rows=%s tokens=%s truncated=%s",
-            len(result.rows),
-            result.estimated_tokens,
-            result.truncated,
-        )
-        return result
+            # Prefix definition rows with def| — rewrite long/short already emitted.
+            rewritten: list[tuple[str, str, str | None]] = []
+            definition_count = len(definitions)
+            for index, (row, path, short) in enumerate(candidates):
+                if index < definition_count:
+                    prefixed = f"def {row}"
+                    prefixed_short = None if short is None else f"def {short}"
+                    rewritten.append((prefixed, path, prefixed_short))
+                else:
+                    rewritten.append((row, path, short))
+            result = apply_budget(rewritten, revision=graph.revision, limits=self._limits)
+            log.debug(
+                "[RepositoryMap.view] view=references rows=%s tokens=%s truncated=%s",
+                len(result.rows),
+                result.estimated_tokens,
+                result.truncated,
+            )
+            if batch is not None and self._cache is not None:
+                self._cache.flush(batch)
+            return result
+        except Exception:
+            if batch is not None:
+                batch.discard()
+            raise
 
     def for_context(
         self,
@@ -524,6 +562,39 @@ class RepositoryMap:
         filtered.sort(key=sort_key)
         return filtered
 
+    def _definition_rows(
+        self, symbol: MapSymbol, batch
+    ) -> tuple[str | None, str | None, bool]:
+        if self._map_row_cache is not None:
+            return self._map_row_cache.definition(symbol, batch=batch)
+        long = definition_row(
+            symbol.source.path,
+            symbol.source.start_line or 0,
+            symbol.source.end_line or 0,
+            symbol.qualified_name,
+            symbol.signature,
+            kind=symbol.kind,
+        )
+        short = definition_row(
+            symbol.source.path,
+            symbol.source.start_line or 0,
+            symbol.source.end_line or 0,
+            symbol.qualified_name,
+            symbol.signature,
+            kind=symbol.kind,
+            short=True,
+        )
+        signature = symbol.signature or ""
+        too_big = len(escape_map_field(signature).encode("utf-8")) > 160
+        return long, short, too_big
+
+    def _module_header(self, node: ModuleNode, batch) -> str | None:
+        if self._map_row_cache is not None:
+            return self._map_row_cache.header(
+                node.module_name, node.path, node.digest, batch=batch
+            )
+        return module_row(node.module_name, node.path)
+
     def _symbol_importer_count(self, graph: DependencyGraph, symbol: MapSymbol) -> int:
         return len(
             {
@@ -540,6 +611,7 @@ class RepositoryMap:
         selected: str | None,
         include_tests: bool = False,
     ) -> MapResult:
+        batch = self._cache.begin_batch() if self._map_row_cache is not None else None
         modules = self._rank_modules(graph, scope=scope, include_tests=include_tests)
         if selected is not None:
             selected_node = next(n for n in graph.nodes if n.file_id == selected)
@@ -583,37 +655,19 @@ class RepositoryMap:
 
         def add_definition(symbol: MapSymbol) -> None:
             nonlocal seed_truncated
-            short = definition_row(
-                symbol.source.path,
-                symbol.source.start_line or 0,
-                symbol.source.end_line or 0,
-                symbol.qualified_name,
-                symbol.signature,
-                kind=symbol.kind,
-                short=True,
-            )
-            signature = symbol.signature or ""
-            long_too_big = len(escape_map_field(signature).encode("utf-8")) > 160
+            long, short, long_too_big = self._definition_rows(symbol, batch)
             if long_too_big:
                 seed_truncated = True
                 if short is not None:
                     candidates.append((short, symbol.source.path, None))
                 return
-            long = definition_row(
-                symbol.source.path,
-                symbol.source.start_line or 0,
-                symbol.source.end_line or 0,
-                symbol.qualified_name,
-                symbol.signature,
-                kind=symbol.kind,
-            )
             if long is not None:
                 candidates.append((long, symbol.source.path, short))
 
         # Header + best symbol per module, then remaining symbols.
         remaining: list[tuple[ModuleNode, MapSymbol]] = []
         for node in modules:
-            header = module_row(node.module_name, node.path)
+            header = self._module_header(node, batch)
             if header is not None:
                 candidates.append((header, node.path, None))
             symbols = per_module_symbols.get(node.file_id, [])
@@ -649,4 +703,6 @@ class RepositoryMap:
             result.estimated_tokens,
             result.truncated,
         )
+        if batch is not None and self._cache is not None:
+            self._cache.flush(batch)
         return result

@@ -19,6 +19,7 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Repository map** — in-memory static dependency graph and budgeted views over a checked index generation; explicit `wl map` / `--indexed-map` only
 - **Task-aware retrieval** — opt-in hybrid ranking over a strict text scan plus optional checked graph/Git signals; explicit `wl context rank|explain|search --task-aware` and `DeterministicContextProvider.retrieve` only (see [context-retrieval.md](context-retrieval.md))
 - **Token-aware packing** — opt-in L0/L1 composition and bounded L2 expansion under independent section/request budgets; exact source provenance, local estimators kept separate from provider usage, and an explicit guarded DeepSeek adapter (see [context-packing.md](context-packing.md))
+- **Context cache** — opt-in checkout-local SQLite reuse of deterministic facts, import relations, map rows, ranking projections, and packing spans, gated by live keys/proofs and never a prompt authority (see [context-cache.md](context-cache.md))
 - **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata through an explicit caller approval snapshot
 - **Worktree session** — public CLI provisions or adopts a linked worktree, freezes approvals, and drives the existing orchestrator without a second engine
 

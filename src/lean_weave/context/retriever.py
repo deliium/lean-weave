@@ -43,6 +43,13 @@ from lean_weave.context.retrieval_ranking import (
     weighted_points,
 )
 from lean_weave.context.search import LiteralLineMatch, search_snapshot_literals
+from lean_weave.context_cache.facts import FactCache
+from lean_weave.context_cache.models import ContextCache
+from lean_weave.context_cache.retrieval import (
+    RetrievalCache,
+    RetrievalCandidateCache,
+)
+from lean_weave.context_cache.service import CachePolicy
 from lean_weave.errors import CodeIndexError, ContextScanError, InvalidContextRequest
 from lean_weave.logging_setup import get_logger
 
@@ -111,10 +118,28 @@ class ContextRetriever:
         *,
         load_graph: GraphLoader | None = None,
         read_diff: DiffReader | None = None,
+        cache: ContextCache | None = None,
+        authorized_fact_peer=None,
     ) -> None:
         self.repository = repository
         self.load_graph = load_graph
         self.read_diff = read_diff
+        self.authorized_fact_peer = authorized_fact_peer
+        self._cache = cache if cache is not None and cache.enabled else None
+        self._retrieval_cache = None
+        self._candidate_cache = None
+        self._fact_cache = None
+        if self._cache is not None:
+            policy = CachePolicy.from_context(
+                repository.config,
+                state_dir=repository.state_dir,
+                protected_paths=repository.protected_paths,
+            )
+            self._retrieval_cache = RetrievalCache(self._cache, policy=policy)
+            self._candidate_cache = RetrievalCandidateCache(
+                self._cache, policy=policy
+            )
+            self._fact_cache = FactCache(self._cache, policy=policy)
 
     def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         return self._execute(request)[0]
@@ -226,6 +251,48 @@ class ContextRetriever:
                         degraded.append("git_unavailable")
                         log.debug("[Context.retriever] git unavailable")
 
+                batch = (
+                    self._cache.begin_batch() if self._cache is not None else None
+                )
+                cached = None
+                if self._retrieval_cache is not None:
+                    cached = self._retrieval_cache.load(
+                        request,
+                        top_k=top_k,
+                        weights=weights,
+                        allowed_paths=allowed_paths,
+                        scan=scan,
+                        graph=graph,
+                        git_paths=git_paths,
+                        degraded=degraded,
+                        batch=batch,
+                    )
+                if cached is not None:
+                    result = cached["result"]
+                    selected = cached["selected"]
+                    outcome = (
+                        on_ranked(result, scan, graph, tuple(selected))
+                        if on_ranked is not None
+                        else None
+                    )
+                    if not scan.revalidate():
+                        log.warning(
+                            "[Context.retriever] source changed after cached result"
+                        )
+                        return (
+                            self._changed(request, top_k=top_k, degraded=degraded),
+                            None,
+                        )
+                    log.debug(
+                        "[Context.retriever] task=%s sources=%s returned=%s truncated=%s degraded=%s cache=hit",
+                        request.task_kind,
+                        len(scan.snapshots),
+                        len(result.hits),
+                        result.truncated,
+                        degraded,
+                    )
+                    return result, outcome
+
                 result_hits, more_trunc, selected = self._rank_local(
                     scan,
                     request=request,
@@ -236,6 +303,7 @@ class ContextRetriever:
                     git_paths=git_paths,
                     degraded=degraded,
                     allowed_paths=allowed_paths,
+                    batch=batch,
                 )
                 truncated = truncated or more_trunc
                 result = RetrievalResult(
@@ -246,17 +314,35 @@ class ContextRetriever:
                     degraded_reasons=_ordered_degraded(degraded),
                     truncated=truncated,
                 )
+                if self._retrieval_cache is not None:
+                    self._retrieval_cache.publish(
+                        request,
+                        top_k=top_k,
+                        weights=weights,
+                        allowed_paths=allowed_paths,
+                        scan=scan,
+                        graph=graph,
+                        git_paths=git_paths,
+                        degraded=degraded,
+                        batch=batch,
+                        result=result,
+                        selected=selected,
+                    )
                 outcome = (
                     on_ranked(result, scan, graph, tuple(selected))
                     if on_ranked is not None
                     else None
                 )
                 if not scan.revalidate():
+                    if batch is not None:
+                        batch.discard()
                     log.warning("[Context.retriever] source changed before return")
                     return (
                         self._changed(request, top_k=top_k, degraded=degraded),
                         None,
                     )
+                if batch is not None and self._cache is not None:
+                    self._cache.flush(batch)
                 log.debug(
                     "[Context.retriever] task=%s sources=%s returned=%s truncated=%s degraded=%s",
                     request.task_kind,
@@ -309,6 +395,7 @@ class ContextRetriever:
         git_paths: frozenset[str] | None,
         degraded: list[DegradedReason],
         allowed_paths: frozenset[str] | None = None,
+        batch=None,
     ) -> tuple[list[RetrievalHit], bool, list[RankCandidate]]:
         truncated_flag = False
         snapshots = {
@@ -350,7 +437,20 @@ class ContextRetriever:
             for path, state in states.items():
                 if not is_python(path):
                     continue
-                facts = extract_python_facts(state.snapshot)
+                facts = None
+                if self._fact_cache is not None:
+                    outcome = self._fact_cache.lookup(state.snapshot)
+                    if outcome.hit:
+                        facts = outcome.value
+                peer_facts = None
+                if facts is None and self.authorized_fact_peer is not None:
+                    peer_facts = self.authorized_fact_peer.load(state.snapshot)
+                if facts is None:
+                    facts = peer_facts or extract_python_facts(state.snapshot)
+                    if self._fact_cache is not None and batch is not None:
+                        self._fact_cache.publish(
+                            state.snapshot, facts, batch=batch
+                        )
                 if facts.status not in {"ok", "ok_truncated"}:
                     continue
                 for item in facts.definitions:
@@ -538,6 +638,21 @@ class ContextRetriever:
 
         # Score files and symbols for base signals
         for path, state in states.items():
+            cached_base = None
+            if self._candidate_cache is not None:
+                cached_base = self._candidate_cache.load(
+                    path=path,
+                    snapshot=state.snapshot,
+                    definitions=definitions_by_path[path],
+                    lexical=state.lexical,
+                    prepared=prepared,
+                    batch=batch,
+                )
+            if cached_base is not None:
+                candidates[("file", path)] = cached_base["file"]
+                for symbol in cached_base["symbols"]:
+                    candidates[("symbol", symbol.symbol_id)] = symbol
+                continue
             file_cand = ensure_file(path)
             lex = state.lexical
             if lex is not None:
@@ -589,6 +704,23 @@ class ContextRetriever:
                         expanded_count=len(prepared.expanded),
                     )
             file_cand.signals["exact_symbol"] = best_exact
+            if self._candidate_cache is not None and batch is not None:
+                self._candidate_cache.publish(
+                    path=path,
+                    snapshot=state.snapshot,
+                    definitions=definitions_by_path[path],
+                    lexical=state.lexical,
+                    prepared=prepared,
+                    batch=batch,
+                    value={
+                        "file": file_cand,
+                        "symbols": [
+                            candidates[("symbol", definition.symbol_id)]
+                            for definition in state.definitions
+                            if ("symbol", definition.symbol_id) in candidates
+                        ],
+                    },
+                )
 
         # Direct seeds
         direct_files = [

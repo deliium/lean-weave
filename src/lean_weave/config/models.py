@@ -142,6 +142,19 @@ class PackingConfig(ConfigModel):
         return self
 
 
+class ContextCacheConfig(ConfigModel):
+    """Opt-in checkout-local cache for deterministic context artifacts.
+
+    Disabled by default. There is intentionally no path, cross-worktree, or
+    automatic-rebuild setting; peers are authorized only through an explicit
+    trusted API call.
+    """
+
+    enabled: bool = False
+    max_bytes: int = Field(default=16_777_216, ge=1_048_576, le=67_108_864)
+    max_entries: int = Field(default=4096, ge=1, le=16_384)
+
+
 class ContextConfig(ConfigModel):
     """Strict deterministic-retrieval limits; every cap is a hard maximum."""
 
@@ -160,6 +173,7 @@ class ContextConfig(ConfigModel):
     exclusions: list[str] = Field(default_factory=list)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     packing: PackingConfig = Field(default_factory=PackingConfig)
+    cache: ContextCacheConfig = Field(default_factory=ContextCacheConfig)
 
     @field_validator("exclusions")
     @classmethod

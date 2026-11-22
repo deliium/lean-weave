@@ -1,7 +1,10 @@
 """Explicit dependency injection without eager provider construction."""
 
+import contextlib
+import os
+import stat
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,8 +16,14 @@ from lean_weave.config import AppConfig, load_config
 from lean_weave.context.git_metadata import read_retrieval_diff
 from lean_weave.context.packer import ContextPacker
 from lean_weave.context.provider import DeterministicContextProvider
-from lean_weave.context.repository import Repository
+from lean_weave.context.repository import Repository, validate_index_source_path
 from lean_weave.context.retriever import ContextRetriever
+from lean_weave.context_cache import DisabledContextCache, SqliteContextCache
+from lean_weave.context_cache.facts import CachedFactLoader
+from lean_weave.context_cache.models import ContextCache
+from lean_weave.context_cache.peer import AuthorizedFactPeer
+from lean_weave.context_cache.service import CachePolicy
+from lean_weave.errors import WorktreeError
 from lean_weave.contracts import (
     CodeExecutor, ContextProvider, LLMProvider, MetricsCollector,
     StateStore, VerificationRunner, WorkflowOrchestrator,
@@ -33,6 +42,8 @@ from lean_weave.workflow.orchestrator import MinimalWorkflowOrchestrator
 from lean_weave.workflow.planning import PlanPolicy
 from lean_weave.workflow.state import JsonCheckpointStore, checkpoint_capability
 from lean_weave.workflow.tools import WorkflowTools
+from lean_weave.worktree.manager import WorktreeManager
+from lean_weave.worktree.registry import Ownership
 
 log = get_logger("app")
 
@@ -122,6 +133,167 @@ def create_code_index(
     )
 
 
+def create_context_cache(
+    context: AppContext,
+    *,
+    workspace_root: Path | None = None,
+    cache_base: Path | None = None,
+    force: bool = False,
+) -> ContextCache:
+    """Construct the lazy cache seam; no scan, directory, or database open.
+
+    ``force`` is reserved for explicit offline maintenance (confirmed clear).
+    """
+
+    root = Path.cwd() if workspace_root is None else Path(workspace_root)
+    try:
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        resolved_root = root
+    settings = context.config.context.cache
+    if not settings.enabled and not force:
+        return DisabledContextCache()
+    return SqliteContextCache(
+        root,
+        config=settings,
+        context_config=context.config.context,
+        state_dir=context.config.workflow.state_dir,
+        protected_paths=_protected_index_paths(context, resolved_root),
+        cache_base=cache_base,
+    )
+
+
+@contextlib.contextmanager
+def open_peer_fact_reuse(
+    manager: WorktreeManager,
+    *,
+    local_feature_id: str,
+    peer_feature_id: str,
+    local_context: AppContext,
+    peer_context: AppContext | None = None,
+    allowed_paths: Iterable[str],
+    cache_base: Path | None = None,
+):
+    """Yield a short-lived capability for trusted same-project Python facts.
+
+    Both feature IDs must resolve to ready managed worktrees of one repository
+    with matching admission/analysis configuration.  Empty scope disables reuse.
+    """
+
+    peer_context = peer_context if peer_context is not None else local_context
+    local = manager.revalidate(local_feature_id)
+    peer = manager.revalidate(peer_feature_id)
+    if (
+        local.record.ownership is not Ownership.MANAGED
+        or peer.record.ownership is not Ownership.MANAGED
+    ):
+        raise WorktreeError("peer_reuse_requires_managed_worktrees")
+    local_root = Path(local.identity.root)
+    peer_root = Path(peer.identity.root)
+    if local_root.resolve() == peer_root.resolve():
+        raise WorktreeError("peer_reuse_requires_distinct_checkouts")
+    try:
+        local_common = local.identity.common_dir.resolve()
+        peer_common = peer.identity.common_dir.resolve()
+        local_stat = os.stat(local_common, follow_symlinks=False)
+        peer_stat = os.stat(peer_common, follow_symlinks=False)
+    except OSError:
+        raise WorktreeError("peer_reuse_unavailable") from None
+    if local_common != peer_common or (
+        local_stat.st_dev,
+        local_stat.st_ino,
+    ) != (peer_stat.st_dev, peer_stat.st_ino):
+        raise WorktreeError("peer_reuse_requires_same_repository")
+    for root in (local_root, peer_root):
+        try:
+            info = os.stat(root, follow_symlinks=False)
+        except OSError:
+            raise WorktreeError("peer_reuse_unavailable") from None
+        if info.st_uid not in {0, os.geteuid()} or not stat.S_ISDIR(info.st_mode):
+            raise WorktreeError("peer_reuse_unavailable")
+        if not os.access(root, os.R_OK | os.X_OK):
+            raise WorktreeError("peer_reuse_unavailable")
+
+    local_settings = local_context.config.context.cache
+    peer_settings = peer_context.config.context.cache
+    if not local_settings.enabled or not peer_settings.enabled:
+        raise WorktreeError("peer_reuse_requires_cache")
+    local_policy = CachePolicy.from_context(
+        local_context.config.context,
+        state_dir=local_context.config.workflow.state_dir,
+        protected_paths=_protected_index_paths(local_context, local_root),
+    )
+    peer_policy = CachePolicy.from_context(
+        peer_context.config.context,
+        state_dir=peer_context.config.workflow.state_dir,
+        protected_paths=_protected_index_paths(peer_context, peer_root),
+    )
+    if local_policy.digest() != peer_policy.digest():
+        raise WorktreeError("peer_reuse_configuration_mismatch")
+
+    scope: list[str] = []
+    for value in allowed_paths:
+        scope.append(validate_index_source_path(value))
+    bounded = frozenset(scope)
+    if not bounded:
+        raise WorktreeError("peer_reuse_requires_scope")
+
+    local_repository = Repository(
+        local_root,
+        local_context.config.context,
+        state_dir=local_context.config.workflow.state_dir,
+        strict_source=True,
+        protected_paths=_protected_index_paths(local_context, local_root),
+    )
+    peer_repository = Repository(
+        peer_root,
+        peer_context.config.context,
+        state_dir=peer_context.config.workflow.state_dir,
+        strict_source=True,
+        protected_paths=_protected_index_paths(peer_context, peer_root),
+    )
+    local_cm = local_repository.scan_python_sources()
+    peer_cm = peer_repository.scan_python_sources()
+    local_scan = local_cm.__enter__()
+    peer_scan = None
+    capability = None
+    try:
+        peer_scan = peer_cm.__enter__()
+        if not local_scan.complete or not peer_scan.complete:
+            raise WorktreeError("peer_reuse_incomplete_scan")
+        local_cache = SqliteContextCache(
+            local_root,
+            config=local_settings,
+            context_config=local_context.config.context,
+            state_dir=local_context.config.workflow.state_dir,
+            protected_paths=_protected_index_paths(local_context, local_root),
+            cache_base=cache_base,
+        )
+        peer_cache = SqliteContextCache(
+            peer_root,
+            config=peer_settings,
+            context_config=peer_context.config.context,
+            state_dir=peer_context.config.workflow.state_dir,
+            protected_paths=_protected_index_paths(peer_context, peer_root),
+            cache_base=cache_base,
+        )
+        capability = AuthorizedFactPeer(
+            local_cache=local_cache,
+            peer_cache=peer_cache,
+            local_scan=local_scan,
+            peer_scan=peer_scan,
+            allowed_paths=bounded,
+            policy=local_policy,
+        )
+        yield capability
+    finally:
+        if capability is not None:
+            capability.close()
+        if peer_scan is not None:
+            peer_cm.__exit__(None, None, None)
+        local_cm.__exit__(None, None, None)
+
+
 def create_repository_map(
     context: AppContext,
     *,
@@ -137,12 +309,16 @@ def create_repository_map(
         tokens_max=context.config.context.map_tokens_max,
         rows_max=context.config.context.map_rows_max,
     )
+    cache = create_context_cache(
+        context, workspace_root=workspace_root, cache_base=cache_base
+    )
     log.debug(
-        "[AppContext.repository_map] selection=lazy tokens_max=%s rows_max=%s",
+        "[AppContext.repository_map] selection=lazy tokens_max=%s rows_max=%s cache=%s",
         limits.tokens_max,
         limits.rows_max,
+        cache.enabled,
     )
-    return RepositoryMap(index, limits=limits)
+    return RepositoryMap(index, limits=limits, cache=cache)
 
 
 def create_indexed_map_preview_pair(
@@ -171,6 +347,27 @@ def create_indexed_map_preview_pair(
     return repository, repository_map
 
 
+def _fact_loader_factory(context: AppContext, *, root: Path):
+    cache = create_context_cache(context, workspace_root=root)
+    index = create_code_index(context, workspace_root=root)
+    if cache.enabled:
+        resolved = root.resolve()
+        repository = Repository(
+            root,
+            context.config.context,
+            state_dir=context.config.workflow.state_dir,
+            strict_source=True,
+            protected_paths=_protected_index_paths(context, resolved),
+        )
+        return lambda: CachedFactLoader(
+            cache,
+            repository,
+            policy=cache.policy,  # type: ignore[attr-defined]
+            index=index,
+        )
+    return lambda: index.fact_loader()
+
+
 def _deterministic_context_provider(
     context: AppContext,
     *,
@@ -182,9 +379,7 @@ def _deterministic_context_provider(
         root,
         config=context.config,
         metadata_digests=metadata_digests,
-        fact_loader_factory=lambda: create_code_index(
-            context, workspace_root=root
-        ).fact_loader(),
+        fact_loader_factory=_fact_loader_factory(context, root=root),
         retriever_factory=retriever_factory,
     )
 
@@ -224,6 +419,7 @@ def create_retrieval_provider(
     *,
     workspace_root: Path | None = None,
     cache_base: Path | None = None,
+    authorized_fact_peer: AuthorizedFactPeer | None = None,
 ) -> DeterministicContextProvider:
     """Build the concrete preview provider with lazy graph/diff retrieval wiring.
 
@@ -238,6 +434,9 @@ def create_retrieval_provider(
         resolved_root = root
     protected = _protected_index_paths(context, resolved_root)
     repository_map = create_repository_map(
+        context, workspace_root=root, cache_base=cache_base
+    )
+    cache = create_context_cache(
         context, workspace_root=root, cache_base=cache_base
     )
 
@@ -265,6 +464,8 @@ def create_retrieval_provider(
             repository,
             load_graph=load_graph,
             read_diff=read_diff,
+            cache=cache,
+            authorized_fact_peer=authorized_fact_peer,
         )
 
     log.debug("[AppContext.retrieval] selection=deterministic_preview")
@@ -301,7 +502,10 @@ def create_context_packer(
     def load_graph(scan):
         return repository_map.graph_for_retrieval_scan(scan)
 
-    retriever = ContextRetriever(repository, load_graph=load_graph)
+    cache = create_context_cache(
+        context, workspace_root=workspace_root, cache_base=cache_base
+    )
+    retriever = ContextRetriever(repository, load_graph=load_graph, cache=cache)
     log.debug(
         "[AppContext.packing] selection=lazy model=%s total_tokens=%s cli_default=%s",
         context.config.llm.model,
@@ -313,6 +517,7 @@ def create_context_packer(
         retriever=retriever,
         model=context.config.llm.model,
         thinking=context.config.llm.thinking,
+        cache=cache,
     )
 
 

@@ -20,6 +20,10 @@ log = get_logger("code_index.identity")
 
 APP_DIR = "lean-weave"
 CACHE_DIR = "code-index"
+CONTEXT_CACHE_DIR = "context-cache"
+CONTEXT_DB_NAME = "cache.sqlite3"
+CONTEXT_LOCK_NAME = "cache.lock"
+CONTEXT_PENDING_NAME = "cache.pending.sqlite3"
 DB_NAME = "index.sqlite3"
 LOCK_NAME = "index.lock"
 PENDING_NAME = "index.pending.sqlite3"
@@ -81,6 +85,54 @@ class IndexLocation:
                 f"{PENDING_NAME}-wal",
                 f"{PENDING_NAME}-shm",
             )
+        )
+
+
+@dataclass(frozen=True)
+class CacheLocation:
+    """Fixed private leaf set for one checkout's context cache."""
+
+    checkout_key: str
+    cache_base: Path
+    checkout_dir: Path
+
+    @property
+    def database(self) -> Path:
+        return self.checkout_dir / CONTEXT_DB_NAME
+
+    @property
+    def lock(self) -> Path:
+        return self.checkout_dir / CONTEXT_LOCK_NAME
+
+    @property
+    def pending(self) -> Path:
+        return self.checkout_dir / CONTEXT_PENDING_NAME
+
+    @property
+    def database_journal(self) -> Path:
+        return self.checkout_dir / f"{CONTEXT_DB_NAME}-journal"
+
+    @property
+    def pending_journal(self) -> Path:
+        return self.checkout_dir / f"{CONTEXT_PENDING_NAME}-journal"
+
+    @property
+    def leaves(self) -> dict[str, Path]:
+        return {
+            CONTEXT_DB_NAME: self.database,
+            CONTEXT_LOCK_NAME: self.lock,
+            CONTEXT_PENDING_NAME: self.pending,
+            f"{CONTEXT_DB_NAME}-journal": self.database_journal,
+            f"{CONTEXT_PENDING_NAME}-journal": self.pending_journal,
+        }
+
+    @property
+    def unsafe_sidecars(self) -> tuple[Path, ...]:
+        return (
+            self.checkout_dir / f"{CONTEXT_DB_NAME}-wal",
+            self.checkout_dir / f"{CONTEXT_DB_NAME}-shm",
+            self.checkout_dir / f"{CONTEXT_PENDING_NAME}-wal",
+            self.checkout_dir / f"{CONTEXT_PENDING_NAME}-shm",
         )
 
 
@@ -197,6 +249,46 @@ def index_location(
         raise CodeIndexError("unsafe_cache")
     _check_ancestors(checkout)
     return IndexLocation(identity.key, base, checkout)
+
+
+def context_cache_location(
+    identity: CheckoutIdentity,
+    *,
+    cache_base: Path | None = None,
+    source_root: Path | None = None,
+) -> CacheLocation:
+    """Resolve the fixed context-cache location without creating anything."""
+
+    if not identity.key or len(identity.key) != 64 or any(
+        char not in "0123456789abcdef" for char in identity.key
+    ):
+        raise CodeIndexError("unsafe_cache")
+    base = _cache_base(cache_base)
+    checkout = base / APP_DIR / CONTEXT_CACHE_DIR / identity.key
+    if source_root is not None and _is_within(checkout, source_root):
+        raise CodeIndexError("unsafe_cache")
+    _check_ancestors(checkout)
+    return CacheLocation(identity.key, base, checkout)
+
+
+def ensure_cache_location(location: CacheLocation) -> None:
+    """Create and validate the private context-cache directory tree."""
+
+    base = location.cache_base
+    try:
+        os.lstat(base)
+    except FileNotFoundError:
+        try:
+            base.mkdir(mode=0o700, parents=True)
+        except OSError:
+            raise CodeIndexError("storage_unavailable") from None
+    except OSError:
+        raise CodeIndexError("unsafe_cache") from None
+    _check_ancestors(base)
+    _ensure_private_dir(base / APP_DIR)
+    _ensure_private_dir(base / APP_DIR / CONTEXT_CACHE_DIR)
+    _ensure_private_dir(location.checkout_dir)
+    _check_ancestors(location.checkout_dir)
 
 
 def ensure_location(location: IndexLocation) -> None:

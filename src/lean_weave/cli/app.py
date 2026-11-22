@@ -7,6 +7,7 @@ from typer.core import TyperGroup
 
 from lean_weave.errors import LeanWeaveError
 from lean_weave.logging_setup import get_logger, redact_console_message
+from lean_weave.cli.commands.cache import cache_app
 from lean_weave.cli.commands.config import config_app
 from lean_weave.cli.commands.context import context_app
 from lean_weave.cli.commands.doctor import doctor
@@ -54,6 +55,7 @@ app.add_typer(worktree_app, name="worktree")
 app.add_typer(llm_app, name="llm")
 app.add_typer(index_app, name="index")
 app.add_typer(map_app, name="map")
+app.add_typer(cache_app, name="cache")
 
 
 @app.callback()

@@ -75,6 +75,9 @@ class PackingCatalog:
         scan: SourceScan,
         *,
         allowed_paths: frozenset[str] | None = None,
+        fact_cache=None,
+        span_cache=None,
+        batch=None,
     ) -> None:
         self.complete = scan.complete
         self.degraded = () if scan.complete else ("source_scan_incomplete",)
@@ -85,6 +88,9 @@ class PackingCatalog:
         }
         self._facts: dict[str, tuple[DefinitionFact, ...]] = {}
         self._spans: dict[str, tuple[SourceSpan, ...]] = {}
+        self._fact_cache = fact_cache
+        self._span_cache = span_cache
+        self._batch = batch
 
     def snapshot(self, path: str) -> FileSnapshot | None:
         return self.snapshots.get(path)
@@ -101,7 +107,15 @@ class PackingCatalog:
             if snapshot is None or not is_python(path):
                 self._facts[path] = ()
             else:
-                facts = extract_python_facts(snapshot)
+                facts = None
+                if self._fact_cache is not None:
+                    outcome = self._fact_cache.lookup(snapshot)
+                    if outcome.hit:
+                        facts = outcome.value
+                if facts is None:
+                    facts = extract_python_facts(snapshot)
+                    if self._fact_cache is not None and self._batch is not None:
+                        self._fact_cache.publish(snapshot, facts, batch=self._batch)
                 self._facts[path] = (
                     facts.definitions if facts.status in {"ok", "ok_truncated"} else ()
                 )
@@ -112,6 +126,12 @@ class PackingCatalog:
             snapshot = self.snapshots.get(path)
             if snapshot is None or not is_python(path):
                 self._spans[path] = ()
+            elif self._span_cache is not None:
+                self._spans[path] = self._span_cache.load(
+                    snapshot,
+                    batch=self._batch,
+                    compute=lambda: _python_spans(snapshot),
+                )
             else:
                 self._spans[path] = _python_spans(snapshot)
         return self._spans[path]
@@ -212,7 +232,7 @@ class PackingCatalog:
             snapshot,
             start=promoted.start,
             end=promoted.end,
-            kind=promoted.kind,
+            kind="definition" if promoted.kind == "definition" else "range",
             symbol=promoted.symbol,
             reasons=reasons,
             covered_selectors=(f"{path}:{start}-{end}",),
@@ -255,7 +275,7 @@ class PackingCatalog:
                 snapshot,
                 start=chosen.start,
                 end=chosen.end,
-                kind=chosen.kind,
+                kind="definition" if chosen.kind == "definition" else "range",
                 symbol=chosen.symbol,
                 reasons=(_dominant_reason(hit),),
             ),
@@ -501,6 +521,8 @@ def map_rows_from_graph(
     ranked_paths: Sequence[str],
     allowed_paths: frozenset[str] | None,
     rows_max: int,
+    row_cache=None,
+    batch=None,
 ) -> tuple[tuple[dict[str, str], ...], str | None]:
     """Return metadata-only module rows and the graph revision."""
 
@@ -525,7 +547,12 @@ def map_rows_from_graph(
     rows: list[dict[str, str]] = []
     for path in ordered[:rows_max]:
         node = by_path[path]
-        row = module_row(node.module_name, path)
+        if row_cache is not None:
+            row = row_cache.header(
+                node.module_name, path, node.digest, batch=batch
+            )
+        else:
+            row = module_row(node.module_name, path)
         if row is None:
             continue
         rows.append(

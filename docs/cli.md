@@ -27,6 +27,10 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl context inspect PATH [--symbol NAME \| --lines START:END] [--json]` | Safe file metadata or one admitted range |
 | `wl context inspect QUERY --packed [--pack-level l0\|l1] [--json]` | Packed provenance view without source bodies |
 | `wl context budget QUERY [--pack-level l0\|l1] [--json]` | Numeric packed limits and composition only |
+| `wl cache status` | Inspect the opt-in context cache without opening source |
+| `wl cache stats` | Show cache hit/miss/rebuild/invalidation counters |
+| `wl cache clear --yes` | Remove this checkout's context-cache data |
+| `wl cache rebuild` | Seed a fresh cache from one strict scan (see [context-cache.md](context-cache.md)) |
 | `wl llm check` | Opt-in DeepSeek smoke test: one small fixed request plus safe usage output |
 | `wl feature DESCRIPTION (--auto \| --review) [--worktree PATH]` | Start a feature inside an isolated linked worktree; `--worktree` adopts an existing clean checkout |
 | `wl status FEATURE` | Read-only workflow status, branch, changes, verification, usage, and next action |
@@ -95,6 +99,10 @@ context:
   search_hits_max: 100
   recent_commits_max: 10
   exclusions: []
+  cache:
+    enabled: false
+    max_bytes: 16777216
+    max_entries: 4096
 tools:
   read_allow: []
   write_allow: []
@@ -433,4 +441,5 @@ validation tools, not the product runner. See [MVP 1 readiness](mvp1-readiness.m
 - [Getting Started](getting-started.md) — installation and offline test environments
 - [Architecture](architecture.md) — component boundaries and decisions
 - [Benchmarks](benchmarks.md) — fixture corpus and token baseline tooling
+- [Context cache](context-cache.md) — opt-in cache commands and recovery
 - [MVP 1 readiness](mvp1-readiness.md) — offline/live/safety verdicts

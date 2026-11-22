@@ -136,6 +136,14 @@ path signals injected at `app.py::create_retrieval_provider`. Stage
 `ContextProvider.build` is unchanged; only explicit `retrieve()` / CLI preview
 paths consume ranked hits.
 
+`context_cache/` is a separate optional V2 store keyed to checkout
+path/device/inode under the private external cache root. It reuses the index
+identity/lease patterns but owns a distinct schema, lock, epoch, and set of
+`wl cache` maintenance commands. Only bounded deterministic metadata is
+persisted behind live proofs; source/admin authority, prompts, task text, and
+model output never enter it. `app.py::create_context_cache` and
+`open_peer_fact_reuse` are lazy seams, and disabled mode performs no cache I/O.
+
 `context/packer.py`, `packing_source.py`, `packing_tokens.py`,
 `packing_session.py`, and `packing_gateway.py` add the opt-in V2 composition
 surface. `PackedContextV2` is additive: whole units are materialized from one

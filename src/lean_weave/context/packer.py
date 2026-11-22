@@ -68,6 +68,11 @@ from lean_weave.context.packing_tokens import (
     tool_section_text,
 )
 from lean_weave.context.repository import FileSnapshot, Repository, SourceScan
+from lean_weave.context_cache.facts import FactCache
+from lean_weave.context_cache.map_rows import MapRowCache
+from lean_weave.context_cache.models import ContextCache
+from lean_weave.context_cache.packing import PackingSpanCache
+from lean_weave.context_cache.service import CachePolicy
 from lean_weave.context.retrieval_models import (
     RetrievalHit,
     RetrievalRequest,
@@ -138,6 +143,7 @@ class ContextPacker:
         token_counter: TokenCounter | None = None,
         model: str = "deepseek-flash",
         thinking: bool = False,
+        cache: ContextCache | None = None,
     ) -> None:
         self.repository = repository
         self.retriever = retriever or ContextRetriever(repository)
@@ -146,6 +152,19 @@ class ContextPacker:
         self.context_config = repository.config
         self.default_model = model
         self.default_thinking = thinking
+        self._cache = cache if cache is not None and cache.enabled else None
+        self._fact_cache = None
+        self._span_cache = None
+        self._row_cache = None
+        if self._cache is not None:
+            policy = CachePolicy.from_context(
+                repository.config,
+                state_dir=repository.state_dir,
+                protected_paths=repository.protected_paths,
+            )
+            self._fact_cache = FactCache(self._cache, policy=policy)
+            self._span_cache = PackingSpanCache(self._cache, policy=policy)
+            self._row_cache = MapRowCache(self._cache, policy=policy)
 
     # -- public initial composition ---------------------------------
     def build(self, request: PackRequest) -> PackResult:
@@ -257,6 +276,7 @@ class ContextPacker:
                 None,
             )
 
+        batch = self._cache.begin_batch() if self._cache is not None else None
         try:
             result, outcome = self.retriever.rank_checked(
                 RetrievalRequest(query=request.query),
@@ -269,6 +289,7 @@ class ContextPacker:
                     selected,
                     envelope=envelope,
                     counter_state=counter_state,
+                    batch=batch,
                 ),
             )
         except ContextScanError:
@@ -309,6 +330,11 @@ class ContextPacker:
                 None,
             )
         assert isinstance(outcome, Composition)
+        if batch is not None and self._cache is not None:
+            if outcome.result.status == "ready":
+                self._cache.flush(batch)
+            else:
+                batch.discard()
         return outcome.result, outcome
 
     @dataclass(frozen=True)
@@ -522,13 +548,20 @@ class ContextPacker:
         *,
         envelope: "_EnvelopeView",
         counter_state: _CounterState,
+        batch=None,
     ) -> Composition:
         scope = (
             frozenset(request.output_paths)
             if request.output_paths is not None
             else None
         )
-        catalog = PackingCatalog(scan, allowed_paths=scope)
+        catalog = PackingCatalog(
+            scan,
+            allowed_paths=scope,
+            fact_cache=self._fact_cache,
+            span_cache=self._span_cache,
+            batch=batch,
+        )
         omitted: list[PackOmission] = []
         deduplicated = 0
         considered = len(ranked.hits)
@@ -630,6 +663,8 @@ class ContextPacker:
                 ranked_paths=ranked_paths,
                 allowed_paths=scope,
                 rows_max=self.context_config.map_rows_max,
+                row_cache=self._row_cache,
+                batch=batch,
             )
         else:
             candidate_rows = metadata_map_rows(
@@ -1199,9 +1234,16 @@ class ContextPacker:
 
         session.attempts += 1
         counter_state = _CounterState(self.token_counter)
+        batch = self._cache.begin_batch() if self._cache is not None else None
         try:
             with self.repository.scan_retrieval_sources() as scan:
-                catalog = PackingCatalog(scan, allowed_paths=scope)
+                catalog = PackingCatalog(
+                    scan,
+                    allowed_paths=scope,
+                    fact_cache=self._fact_cache,
+                    span_cache=self._span_cache,
+                    batch=batch,
+                )
                 drift = self._session_drift(session, scan, catalog)
                 if drift is not None:
                     if drift == REASON_SOURCE_SCAN_INCOMPLETE:
@@ -1278,8 +1320,12 @@ class ContextPacker:
                         assembly,
                     )
                 if not scan.revalidate():
+                    if batch is not None:
+                        batch.discard()
                     session.close()
                     return self._stale_result(session, envelope_view)
+                if batch is not None and self._cache is not None:
+                    self._cache.flush(batch)
 
                 fragments = tuple(
                     PackedFragment(

@@ -148,4 +148,5 @@ before inspecting rank output.
 - [CLI Reference](cli.md)
 - [Architecture](architecture.md)
 - [Code Index](code-index.md)
+- [Context cache](context-cache.md) — opt-in reuse of ranking projections
 - [Benchmarks](benchmarks.md)
