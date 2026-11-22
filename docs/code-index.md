@@ -182,3 +182,8 @@ fixtures.
 Checked whole-generation reads also feed the offline [Repository map](repository-map.md)
 (`wl map …` and optional `wl context build --indexed-map`). Those surfaces never
 mutate the index and never become workflow prompt authority by default.
+
+Release validation now times initial build, unchanged update, edit, rename,
+delete, recreate and clean rebuild separately. On the packaged fixture the
+incremental result matched a clean rebuild after every operation. The measured
+details are in [v2-readiness.md](v2-readiness.md).

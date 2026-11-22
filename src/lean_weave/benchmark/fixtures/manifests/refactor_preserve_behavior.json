@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "id": "refactor_preserve_behavior",
+  "tree": "refactor_preserve_behavior",
+  "expected_head": "3f5dda3729f32bd8453d44e20f8de3656983cda9",
+  "request": "Extract the repeated normalization into a _normalize helper while preserving classify's public behavior for yes and no inputs.",
+  "write_paths": [
+    "src/labels.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_refactor"
+  ],
+  "checks": [
+    {
+      "id": "assert_refactor",
+      "oracle": "assert_refactor.py",
+      "target": null,
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{workspace}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "extract normalize",
+      "description": "Add _normalize and call it from classify",
+      "files": [
+        "src/labels.py"
+      ],
+      "depends_on": []
+    }
+  ],
+  "workflow_limits": {},
+  "expected_behavior": {
+    "outcome": "success",
+    "status": "success"
+  },
+  "pass_criteria": {
+    "files": {
+      "src/labels.py": {
+        "must_contain": [
+          "def _normalize",
+          "_normalize(value)"
+        ]
+      }
+    }
+  }
+}

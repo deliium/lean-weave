@@ -57,6 +57,7 @@ class ArmRow:
     error_class: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
     retrieval: dict[str, Any] = field(default_factory=dict)
+    evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,6 +71,7 @@ class BenchmarkRun:
     started_at: str
     completed_at: str | None = None
     revision: str | None = None
+    source_revision: str | None = None
     spec: dict[str, Any] = field(default_factory=dict)
     condition_fingerprint: str | None = None
     rows: list[ArmRow] = field(default_factory=list)
@@ -86,6 +88,7 @@ class BenchmarkRun:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "revision": self.revision,
+            "source_revision": self.source_revision,
             "spec": self.spec,
             "condition_fingerprint": self.condition_fingerprint,
             "rows": [row.to_dict() for row in self.rows],

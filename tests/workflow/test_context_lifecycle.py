@@ -301,3 +301,18 @@ def test_v2_planning_bypass_runs_existing_simple_path(tmp_path):
     assert len(provider.requests) == 1
     assert provider.requests[0]["stage"] == "implement"
     assert "value = 1" in provider.requests[0]["messages"][-1]["content"]
+
+
+def test_v2_strict_refuses_no_complete_anchor_before_implement_dispatch(tmp_path):
+    root, config, approval, store, policy, orchestrator = make_adapter(
+        tmp_path,
+        extra_files={"src/a.py": ""},
+        mode="v2",
+    )
+    provider = MockLLMProvider([plan_response()])
+    orchestrator._provider = provider  # type: ignore[attr-defined]
+    state = orchestrator.run_feature("strict", "edit a")
+    assert state.stage.value != "done"
+    assert state.stage.value in {"failed", "interrupted"}
+    assert len(provider.requests) == 1
+    assert "system-implement" not in str(provider.requests[0]["messages"])

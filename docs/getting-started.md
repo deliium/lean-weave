@@ -249,4 +249,5 @@ PYTHONPATH=spikes uv run python -m deepseek_probe.probe
 
 - [Architecture](architecture.md) — system design overview
 - [CLI Reference](cli.md) — commands and configuration
+- [V2 readiness](v2-readiness.md) — current validation verdict and evidence
 - [spikes/README.md](../spikes/README.md) — probe setup and hygiene

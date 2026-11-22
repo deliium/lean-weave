@@ -167,6 +167,19 @@ developer imports identical). Freeze `relevant_paths`, inclusive
 `relevant_ranges`, `required_dependencies` and symbol labels before inspecting
 rank output. Every label is validated against the packaged tree.
 
+## V2 validation status
+
+`wl benchmark run --suite retrieval` now records per-split P@K/R@K, missing
+required symbols/dependencies by full span coverage, unique selected source
+tokens, pack-estimated input, dedup decisions and emitted duplicate lines.
+Repeats use fresh scratch checkouts and a declared alternating schedule.
+Controlled map-off, graph-off, tight-budget and cache-only ablations are also
+recorded: on the packaged corpus they leave P@K/R@K and missing-dependency counts
+unchanged, while the tight budget reduces selected source tokens by 81.5 on
+development and 258 on holdout. Current measured results, including a holdout
+required-dependency regression, are summarized in
+[v2-readiness.md](v2-readiness.md). Do not tune ranking weights against holdout.
+
 ## See also
 
 - [CLI Reference](cli.md)

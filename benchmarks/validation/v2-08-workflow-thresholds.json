@@ -1,0 +1,35 @@
+{
+  "version": 2,
+  "gates": [
+    {
+      "metric": "correctness",
+      "provenance": "offline_scripted",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "per_case_correctness",
+      "provenance": "offline_scripted",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "success_rate_delta",
+      "provenance": "offline_scripted",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "incorrect_pairs",
+      "provenance": "offline_scripted",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "incomplete_pairs",
+      "provenance": "offline_scripted",
+      "scope": "suite",
+      "max_regression": 0
+    }
+  ]
+}

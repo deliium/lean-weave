@@ -14,6 +14,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
@@ -47,6 +48,7 @@ from lean_weave.benchmark.offline import (
 )
 from lean_weave.benchmark.results import (
     BenchmarkMetricReport,
+    project_attempt_evidence,
     project_metrics,
     render_human_summary,
     write_report,
@@ -121,6 +123,15 @@ class CaseOutcome:
     check_executions: int | None = None
     check_passes: int | None = None
     check_failures: int | None = None
+    variant: str | None = None
+    context_mode: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    coverage: dict[str, bool] = field(default_factory=dict)
+    evidence: dict[str, Any] = field(default_factory=dict)
+    logical_calls: int = 0
+    retry_attempts: int = 0
 
 
 @dataclass
@@ -273,6 +284,8 @@ class LiveAdmission:
     reserved_cost_usd: Decimal
     pricing: PricingSchedule
     config_paths: tuple[Path, ...]
+    variants: tuple[str, ...] = ()
+    arms: tuple[dict[str, str], ...] = ()
 
 
 def _decimal(value: Any, *, field: str) -> Decimal:
@@ -335,6 +348,30 @@ def _child_environment(key: str) -> dict[str, str]:
     return env
 
 
+def _live_variant_snapshot(
+    payload: Mapping[str, Any],
+    destination: Path,
+    *,
+    case_id: str,
+    variant: str,
+) -> Path:
+    """Write one immutable admission snapshot with only context mode changed."""
+
+    mode = {
+        "v1": "v1",
+        "v2": "v2-with-v1-fallback",
+    }[variant]
+    snapshot = dict(payload)
+    context = dict(snapshot.get("context") or {})
+    context["workflow_mode"] = mode
+    snapshot["context"] = context
+    destination.mkdir(parents=True, exist_ok=True)
+    path = destination / f"{case_id}.{variant}.yaml"
+    path.write_text(yaml.safe_dump(snapshot, sort_keys=False), encoding="utf-8")
+    validate_live_config(path, case_id)
+    return path
+
+
 def validate_live_request(
     *,
     live: bool,
@@ -345,6 +382,7 @@ def validate_live_request(
     pricing_path: Path | None,
     deadline_s: float | None,
     repeats: int,
+    variants: Sequence[str] = (),
 ) -> LiveAdmission:
     """Fail closed before any billable child launch.
 
@@ -355,6 +393,11 @@ def validate_live_request(
     if not live:
         raise FixtureError("live_opt_in_required")
     selected = tuple(dict.fromkeys(cases))
+    selected_variants = tuple(dict.fromkeys(variants))
+    if selected_variants:
+        if len(selected_variants) != 2 or set(selected_variants) != {"v1", "v2"}:
+            raise FixtureError("live_variants_invalid")
+    paired = bool(selected_variants)
     if not selected:
         raise FixtureError("live_cases_required")
     for case_id in selected:
@@ -384,6 +427,8 @@ def validate_live_request(
         ):
             raise FixtureError("live_environment_contaminated")
     config_paths: list[Path] = []
+    arms: list[dict[str, str]] = []
+    admission_dir = Path(tempfile.mkdtemp(prefix="lw-live-admission-"))
     reserved_tokens = 0
     reserved_cost = Decimal(0)
     for case_id in selected:
@@ -401,20 +446,51 @@ def validate_live_request(
         budget = workflow.get("feature_token_budget", 20000)
         if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
             raise FixtureError("live_budget_invalid")
-        arm_tokens = budget * repeats
+        if paired:
+            for variant in selected_variants:
+                snapshot = _live_variant_snapshot(
+                    payload,
+                    admission_dir,
+                    case_id=case_id,
+                    variant=variant,
+                )
+                config_paths.append(snapshot)
+                arms.append(
+                    {
+                        "case_id": case_id,
+                        "variant": variant,
+                        "context_mode": {
+                            "v1": "v1",
+                            "v2": "v2-with-v1-fallback",
+                        }[variant],
+                        "config_path": str(snapshot),
+                    }
+                )
+        else:
+            mode = str((payload.get("context") or {}).get("workflow_mode") or "v1")
+            config_paths.append(config_path)
+            arms.append(
+                {
+                    "case_id": case_id,
+                    "variant": f"{mode}-live",
+                    "context_mode": mode,
+                    "config_path": str(config_path),
+                }
+            )
+        arm_tokens = budget * repeats * (len(selected_variants) if paired else 1)
         reserved_tokens += arm_tokens
         reserved_cost += (
             Decimal(arm_tokens) * pricing.highest_rate_per_token(model)
         ).quantize(Decimal("0.000001"), rounding=ROUND_CEILING)
-        config_paths.append(config_path)
     if reserved_tokens > max_tokens:
         raise FixtureError("live_token_limit_exceeded")
     if reserved_cost > cost_limit:
         raise FixtureError("live_cost_limit_exceeded")
     log.info(
-        "[Benchmark.live] admission=ok cases=%s repeats=%s tokens=%s",
+        "[Benchmark.live] admission=ok cases=%s repeats=%s paired=%s tokens=%s",
         len(selected),
         repeats,
+        paired,
         reserved_tokens,
     )
     return LiveAdmission(
@@ -424,6 +500,8 @@ def validate_live_request(
         reserved_cost_usd=reserved_cost,
         pricing=pricing,
         config_paths=tuple(config_paths),
+        variants=selected_variants,
+        arms=tuple(arms),
     )
 
 
@@ -516,6 +594,9 @@ def run_live_case(
     config_path: Path,
     output_dir: Path,
     deadline_s: float,
+    deadline_at: float | None = None,
+    variant: str | None = None,
+    context_mode: str | None = None,
 ) -> CaseOutcome:
     started = time.monotonic()
     validate_live_config(config_path, case_id)
@@ -533,23 +614,46 @@ def run_live_case(
         "LANG": "C",
         "LC_ALL": "C",
     }
-    remaining = max(1.0, deadline_s - (time.monotonic() - started))
-    completed = subprocess.run(
-        [
-            *installed_wl(),
-            "--config",
-            str(snapshot),
-            "feature",
-            load_manifest(case_id).request,
-            "--auto",
-        ],
-        cwd=str(origin),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=remaining,
-        check=False,
-    )
+    if deadline_at is not None:
+        remaining = deadline_at - time.monotonic()
+    else:
+        remaining = deadline_s - (time.monotonic() - started)
+    if remaining <= 0:
+        raise FixtureError("live_deadline_exceeded")
+    try:
+        completed = subprocess.run(
+            [
+                *installed_wl(),
+                "--config",
+                str(snapshot),
+                "feature",
+                load_manifest(case_id).request,
+                "--auto",
+            ],
+            cwd=str(origin),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=max(0.001, remaining),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        log.warning("[Benchmark.live] case=%s outcome=timeout", case_id)
+        return CaseOutcome(
+            case_id=case_id,
+            mode="live_deepseek",
+            status="timeout",
+            reason="live_timeout",
+            expected_outcome=str(load_manifest(case_id).expected_behavior.get("outcome")),
+            oracle_ok=None,
+            expected_negative=False,
+            duration_ms=duration_ms,
+            error="live_timeout",
+            exit_code=None,
+            variant=variant,
+            context_mode=context_mode,
+        )
     view = parse_view(completed.stdout) if completed.returncode == 0 else {}
     feature_id = view.get("feature_id")
     status = view.get("status", "error")
@@ -557,16 +661,32 @@ def run_live_case(
     oracle_ok = None
     metrics_path = None
     report = None
+    evidence: dict[str, Any] = {}
     if feature_id:
         worktree = worktree_for(origin, feature_id)
         manifest = load_manifest(case_id)
-        oracle_ok = all(item.ok for item in run_all_oracles(manifest, worktree))
+        if deadline_at is not None and time.monotonic() >= deadline_at:
+            # No further external verification subprocess after expiry.
+            reason = reason or "oracle_skipped_deadline"
+        else:
+            oracle_ok = all(item.ok for item in run_all_oracles(manifest, worktree))
+        journal = journal_for(worktree)
+        store = JsonCheckpointStore(worktree)
         report = project_metrics(
             feature_id=feature_id,
-            journal=journal_for(worktree),
-            store=JsonCheckpointStore(worktree),
+            journal=journal,
+            store=store,
             provenance="deepseek_live",
+            context_mode=context_mode,
         )
+        try:
+            envelope = store.load_checkpoint(feature_id)
+            evidence = project_attempt_evidence(
+                snapshot=journal.reporting_snapshot(feature_id),
+                control=envelope.control,
+            )
+        except Exception:  # noqa: BLE001 - evidence gap, not a reason to invent
+            evidence = {"dispatch": "unknown", "journal_available": False}
         metrics_path = str(output_dir / f"live-{case_id}-{feature_id}.metrics.json")
         write_report(Path(metrics_path), report)
     duration_ms = int((time.monotonic() - started) * 1000)
@@ -589,6 +709,15 @@ def run_live_case(
         check_executions=report.checks.executions if report else None,
         check_passes=report.checks.passes if report else None,
         check_failures=report.checks.failures if report else None,
+        variant=variant,
+        context_mode=context_mode,
+        input_tokens=report.tokens.prompt_tokens if report else None,
+        output_tokens=report.tokens.completion_tokens if report else None,
+        total_tokens=report.tokens.total_processed_tokens if report else None,
+        coverage=(report.tokens.coverage.__dict__.copy() if report else {}),
+        evidence=evidence,
+        logical_calls=report.logical_workflow_calls if report else 0,
+        retry_attempts=report.gateway_retry_attempts if report else 0,
     )
 
 

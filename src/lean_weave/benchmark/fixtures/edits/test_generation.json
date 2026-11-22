@@ -1,0 +1,5 @@
+{
+  "files": {
+    "tests/test_calc.py": "from src.calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\ndef test_add_edges():\n    assert add(-1, 1) == 0\n    assert add(0, 0) == 0\n"
+  }
+}

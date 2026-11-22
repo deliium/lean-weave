@@ -508,7 +508,41 @@ def resolve_anchor_span(
         return None
     definitions = [item for item in covering if item.kind == "definition"]
     pool = definitions or covering
-    return min(pool, key=lambda item: (item.end - item.start, item.start, item.order))
+    chosen = min(pool, key=lambda item: (item.end - item.start, item.start, item.order))
+    return _with_enclosing_declaration(spans, chosen)
+
+
+def _with_enclosing_declaration(
+    spans: Sequence[SourceSpan], chosen: SourceSpan
+) -> SourceSpan:
+    """Include the immediate enclosing definition line for a nested span.
+
+    A method selected on its own starts at ``def`` and omits the enclosing
+    ``class`` declaration. Extending only the start keeps the selected body
+    bounded while preserving the declaration that makes the slice coherent.
+    """
+
+    if chosen.kind != "definition":
+        return chosen
+    parents = [
+        item
+        for item in spans
+        if item.kind == "definition"
+        and item.start < chosen.start
+        and item.end >= chosen.end
+    ]
+    if not parents:
+        return chosen
+    parent = max(parents, key=lambda item: (item.start, -item.end, -item.order))
+    if parent.start >= chosen.start:
+        return chosen
+    return SourceSpan(
+        start=parent.start,
+        end=chosen.end,
+        kind=chosen.kind,
+        symbol=chosen.symbol,
+        order=chosen.order,
+    )
 
 
 def promote_range(

@@ -36,27 +36,37 @@ Only one declared condition may differ per axis:
 
 | Axis | Allowed difference |
 | --- | --- |
-| `strategy` | V1 default versus V2 default |
+| `strategy` | V1 default versus V2 default (workflow `context_mode` or retrieval `strategy`) |
 | `map` | graph/map switch |
-| `budget` | named pack budgets (for example `v2-tight`) |
+| `budget` | named pack source/total budgets (for example `v2-tight`) |
 | `cache` | labeled local cache state |
 | `revision` | tool implementation revision |
 
 The full schedules are paired by `(suite, fixture, repetition)` first; a
-missing arm is incompatible, never silently dropped. Provenance, fixture SHA or
-tree fingerprint, origin HEAD, verifier/limits, model settings and outcome
-contract must match. Incomplete or failed arms stay in the correctness
-denominator. Token deltas require both arms to be correct and fully covered for
-that field. No percentage delta is computed from zero.
+missing arm is incompatible, never silently dropped. The schedule is read from
+`spec.schedule` when present, so a row missing from both files is still an
+incompatibility. `not_started` rows count as incomplete outcomes. Provenance,
+fixture SHA or tree fingerprint, fixture HEAD, verifier/limits, model settings
+and outcome contract must match. The checked-out source-tree digest and package
+source revision must match except on the `revision` axis. Incomplete or failed
+arms stay in the correctness denominator.
+
+Token deltas require both arms to be correct and the **specific metric** to be
+covered; unrelated optional counters that are absent no longer disqualify a
+covered total. Expected-negative fixtures are excluded from positive-token
+coverage but remain in correctness counts. Signed candidate-minus-baseline
+deltas are reported for input/output/total tokens, the local estimate, logical
+calls, workflow retries, duration and expansion. No percentage delta is
+computed from zero.
 
 ### Regression thresholds
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "gates": [
     {
-      "metric": "token_delta_median",
+      "metric": "total_tokens_delta_median",
       "provenance": "offline_scripted",
       "scope": "suite",
       "max_regression": 0
@@ -65,10 +75,20 @@ that field. No percentage delta is computed from zero.
 }
 ```
 
+`version: 2` selects paired-regression semantics. For lower-is-better metrics
+the regression is the candidate-minus-baseline delta; for higher-is-better
+deltas the regression is the negative delta, so a tolerance is a real allowed
+loss. `scope` is `suite` or `case:<id>` and is evaluated per case, not as a
+suite average. Version-1 policies remain readable and legacy-only.
+
 Pass `--thresholds FILE` to `wl benchmark compare`. Metric names cover file and
-symbol P@K/R@K, selected source tokens, missing dependency count, covered
-processed tokens per verified task, correctness/success rate, retry frequency
-and duration. Missing coverage is **unevaluable** and fails the requested gate.
+symbol P@K/R@K (including per-split `_delta`, `_worst_delta` and `_total_delta`
+forms), selected source tokens, missing dependency/symbol counts, covered
+processed tokens per verified task, correctness/success rate, retry frequency,
+duration and incomplete/incorrect pair counts. Required coverage and correctness
+gates should use `_worst_delta` (worst per-case regression) and/or
+`_total_delta`; a median can hide a per-case swap. Missing coverage is
+**unevaluable** and fails the requested gate.
 Exit codes: `0` valid non-regressing evidence, `2` invalid/incompatible
 options, `1` incorrect/incomplete run or failed/unevaluable gate. Expected
 negative fixtures that meet their exact contract are not failures. No policy
@@ -120,7 +140,7 @@ legitimately report as truncated.
 
 ## Fixture corpus
 
-Seven pinned cases live in `benchmarks/fixtures/`:
+Nine pinned cases live in `benchmarks/fixtures/`:
 
 | ID | Intent |
 |----|--------|
@@ -131,6 +151,8 @@ Seven pinned cases live in `benchmarks/fixtures/`:
 | `verify_then_repair` | Fail verification, then repair |
 | `insufficient_context` | Out-of-policy plan without widening access |
 | `budget_exhaustion` | Stop on tiny token budgets |
+| `refactor_preserve_behavior` | Extract a helper while preserving observable behavior |
+| `test_generation` | Add normal and edge-case assertions without editing production |
 
 Each manifest pins `expected_head`, request text, write paths, check IDs, and
 pass criteria. Oracles and intended edits stay **outside** the materialized
@@ -249,6 +271,41 @@ Report mock-functional, local-estimate, and live DeepSeek results separately.
 Disclose missing coverage and cache/time conditions. Claim savings only against
 measured comparable results that also report correctness denominators.
 
+Offline arms capture a fixture/manifest fingerprint plus effective execution
+conditions before dispatch: verifier argv and oracle digests, write allowlist,
+model settings, workflow budgets, context knobs, Python/Git versions, lock
+digest, the code-tree digest and an explicit release-binding record. Workflow
+schedules alternate V1/V2 order by repetition and are persisted before
+execution. End-to-end arm duration includes the verification oracle; workflow
+wall, oracle time and collection time are recorded separately.
+
+Run evidence also includes explanatory input-component estimates for system
+instructions, task text, repository map, approved source, editable revisions,
+accumulated tool messages, tool schemas and response format. Components use the
+packing estimator, are counts/digests only, and are not assumed to sum to the
+complete request estimate.
+
+### Paired live opt-in
+
+Live mode accepts exactly `--variant v1 --variant v2` as a paired request. It
+creates two private admission snapshots per case that differ only in
+`context.workflow_mode` (`v1` and `v2-with-v1-fallback`), validates both with
+the strict live parser, reserves both arms before launch and alternates order
+by repetition. Any other filtered live selection is refused before admission.
+Without a separate operator authorization, credentials and limits, no live call
+occurs.
+
+```bash
+wl benchmark run --live --suite workflow --case bug_fix --case multi_file_feature \
+  --variant v1 --variant v2 --repeats 1 --live-config-dir /secure/live-configs \
+  --max-tokens 200000 --max-cost-usd 5.00 \
+  --pricing /secure/pricing.json --deadline-s 300 \
+  --output /secure/results/live-paired.json
+```
+
+See [v2-readiness.md](v2-readiness.md) for the current release verdict and
+measured evidence.
+
 The workflow-context projection labels each report with `context_mode` and
 adds `estimated_input_tokens` per stage. `compare_workflow_context` requires
 matched successful runs, retains per-stage deltas, and reports missing estimates
@@ -272,9 +329,10 @@ live-API claim is implied.
 
 `uv run python -m benchmarks.context_cache --json` reports disabled,
 empty-enabled, and warm modes separately with and without a prebuilt index. It
-reports local wall/CPU time, call counters, per-kind hits, and DB bytes, with
-`llm_calls=0` and `api_tokens_measured=false`. See
-[context-cache.md](context-cache.md).
+reports local wall/CPU time, call counters, per-kind hits, DB bytes and separate
+index build/update timings, with `llm_calls=0` and
+`api_tokens_measured=false`. Add `--scaled` for synthetic 100/1,000-file fanout
+and dense-import workloads. See [context-cache.md](context-cache.md).
 
 ## Redaction
 

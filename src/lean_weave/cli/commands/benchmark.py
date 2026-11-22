@@ -105,6 +105,11 @@ def benchmark_run(
         raise ConfigError("benchmark_all_filters_forbidden")
     if live and suite != "workflow":
         raise ConfigError("benchmark_live_requires_workflow")
+    live_variants = list(variants or ())
+    if live and live_variants and set(live_variants) != {"v1", "v2"}:
+        raise ConfigError("benchmark_live_variants_invalid")
+    if live and len(live_variants) > 2:
+        raise ConfigError("benchmark_live_variants_invalid")
     _reject_existing(output)
     spec = {
         "cases": list(cases or ()),
@@ -124,6 +129,7 @@ def benchmark_run(
             pricing_path=pricing,
             deadline_s=deadline_s,
             repeats=repeats,
+            variants=live_variants,
         )
         log.info(
             "[CLI.benchmark] live_admission cases=%s tokens=%s",
@@ -136,6 +142,8 @@ def benchmark_run(
         live_run = run_live_matrix(
             {
                 "cases": admission.cases,
+                "variants": list(admission.variants),
+                "arms": list(admission.arms),
                 "repeats": admission.repeats,
                 "config_paths": [str(path) for path in admission.config_paths],
                 "max_tokens": max_tokens,
@@ -166,7 +174,16 @@ def benchmark_run(
             started_at=workflow.started_at,
             completed_at=retrieval.completed_at,
             revision=workflow.revision,
-            spec={"workflow": workflow.spec, "retrieval": retrieval.spec},
+            source_revision=workflow.source_revision,
+            spec={
+                "workflow": workflow.spec,
+                "retrieval": retrieval.spec,
+                "schedule": [
+                    *workflow.spec.get("schedule", []),
+                    *retrieval.spec.get("schedule", []),
+                ],
+                "source_tree_digest": workflow.spec.get("source_tree_digest"),
+            },
             condition_fingerprint=workflow.condition_fingerprint,
             rows=[*workflow.rows, *retrieval.rows],
             incomplete=workflow.incomplete or retrieval.incomplete,
@@ -210,13 +227,12 @@ def benchmark_compare(
         typer.echo(json.dumps(payload, sort_keys=True, ensure_ascii=False))
     else:
         typer.echo(render_comparison_markdown(payload), nl=False)
-    if comparison.failed_gates or comparison.unevaluable_gates:
-        raise typer.Exit(1)
     if not comparison.comparable:
         raise typer.Exit(2)
-    if any(row.get("correct") is False for row in baseline_payload.get("rows", [])):
+    if comparison.failed_gates or comparison.unevaluable_gates:
         raise typer.Exit(1)
-    if any(row.get("correct") is False for row in candidate_payload.get("rows", [])):
+    metrics = comparison.metrics
+    if metrics.get("incorrect_pairs") or metrics.get("errors") or metrics.get("not_started"):
         raise typer.Exit(1)
 
 

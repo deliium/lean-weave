@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "id": "test_generation",
+  "tree": "test_generation",
+  "expected_head": "604983991535f31427178390e12a538c7e78934f",
+  "request": "Add assertions for the normal and edge cases of add() without editing the production module.",
+  "write_paths": [
+    "tests/test_calc.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_test_generation"
+  ],
+  "checks": [
+    {
+      "id": "assert_test_generation",
+      "oracle": "assert_test_generation.py",
+      "target": null,
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{workspace}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "extend tests",
+      "description": "Cover normal and edge inputs",
+      "files": [
+        "tests/test_calc.py"
+      ],
+      "depends_on": []
+    }
+  ],
+  "workflow_limits": {},
+  "expected_behavior": {
+    "outcome": "success",
+    "status": "success"
+  },
+  "pass_criteria": {
+    "files": {
+      "tests/test_calc.py": {
+        "must_contain": [
+          "add(1, 2) == 3",
+          "add(-1, 1) == 0"
+        ]
+      }
+    }
+  }
+}

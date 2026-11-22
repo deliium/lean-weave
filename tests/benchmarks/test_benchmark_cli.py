@@ -108,3 +108,50 @@ def test_all_suite_rejects_filters(tmp_path):
         ],
     )
     assert result.exit_code != 0
+
+
+def test_paired_live_selection_is_validated_before_launch(tmp_path):
+    runner = CliRunner()
+    output = tmp_path / "live.json"
+    # Only exactly v1+v2 is a valid paired live opt-in.
+    invalid = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "run",
+            "--live",
+            "--suite",
+            "workflow",
+            "--case",
+            "bug_fix",
+            "--variant",
+            "v2",
+            "--output",
+            str(output),
+        ],
+    )
+    assert invalid.exit_code != 0
+    assert not output.exists()
+
+    # A valid paired selection proceeds to admission and fails closed without
+    # operator config/limits/credentials; it never launches a child.
+    paired = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "run",
+            "--live",
+            "--suite",
+            "workflow",
+            "--case",
+            "bug_fix",
+            "--variant",
+            "v1",
+            "--variant",
+            "v2",
+            "--output",
+            str(output),
+        ],
+    )
+    assert paired.exit_code != 0
+    assert not output.exists()

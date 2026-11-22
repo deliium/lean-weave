@@ -42,7 +42,8 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl stats [--json]` | Read-only checkout-wide feature usage/context statistics |
 | `wl stats feature FEATURE [--json]` | Read-only feature, stage, task, model and strategy breakdown |
 | `wl benchmark run --suite workflow\|retrieval\|all --output FILE [--case ID] [--variant NAME] [--repeats N]` | Deterministic offline suite; live flags add explicit token/cost/deadline/pricing limits |
-| `wl benchmark compare BASELINE CANDIDATE --axis strategy\|map\|budget\|cache\|revision [--thresholds FILE] [--json]` | Paired comparison with optional regression gates |
+| `wl benchmark run --live ... --variant v1 --variant v2` | Explicit paired live admission; both modes are snapshotted and reserved before launch |
+| `wl benchmark compare BASELINE CANDIDATE --axis strategy\|map\|budget\|cache\|revision [--thresholds FILE] [--json]` | Paired comparison with optional version-1 legacy or version-2 regression gates |
 | `wl benchmark report RESULT [--output FILE]` | Markdown report from a versioned run result |
 | `wl --help` | Show commands and global options |
 

@@ -136,3 +136,31 @@ def test_developer_checkout_is_not_initialized(tmp_path: Path):
     materialize("bug_fix", tmp_path / "isolated")
     assert (repo_root / ".git" / "HEAD").read_bytes() == before
     assert not (repo_root / "src" / "calc.py").exists()
+
+
+def test_refactor_oracle_rejects_defined_but_unused_helper(tmp_path: Path):
+    fixture = materialize("refactor_preserve_behavior", tmp_path / "refactor")
+    path = fixture.root / "src" / "labels.py"
+    path.write_text(
+        "def _normalize(value):\n    return value.strip().lower()\n\n\n"
+        "def classify(value):\n    text = value.strip().lower()\n"
+        '    if text in {"yes", "y"}:\n        return "truthy"\n'
+        '    return "other"\n',
+        encoding="utf-8",
+    )
+    result = run_oracle(fixture.manifest, fixture.root, "assert_refactor")
+    assert not result.ok
+    assert "classify must call _normalize" in result.stdout
+
+
+def test_test_generation_oracle_rejects_production_edit(tmp_path: Path):
+    fixture = materialize("test_generation", tmp_path / "tests")
+    apply_intended_edit("test_generation", fixture.root)
+    production = fixture.root / "src" / "calc.py"
+    production.write_text(
+        "def add(left, right):\n    return left + right + 0\n",
+        encoding="utf-8",
+    )
+    result = run_oracle(fixture.manifest, fixture.root, "assert_test_generation")
+    assert not result.ok
+    assert "production module must stay unchanged" in result.stdout

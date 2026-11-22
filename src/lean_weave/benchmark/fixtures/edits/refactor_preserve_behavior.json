@@ -1,0 +1,5 @@
+{
+  "files": {
+    "src/labels.py": "def _normalize(value):\n    return value.strip().lower()\n\n\ndef classify(value):\n    text = _normalize(value)\n    if text in {\"yes\", \"y\"}:\n        return \"truthy\"\n    return \"other\"\n"
+  }
+}

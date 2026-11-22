@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import shutil
 import subprocess
 import tempfile
@@ -15,11 +13,18 @@ from typing import Any
 
 import httpx2
 
+from lean_weave.benchmark.conditions import (
+    canonical_digest,
+    capture_arm_conditions,
+    release_binding,
+    scenario_definition,
+    source_revision,
+    source_tree_digest,
+)
 from lean_weave.benchmark.fixtures import (
     CASE_IDS,
     intended_edit_files,
     load_manifest,
-    materialize,
     run_all_oracles,
 )
 from lean_weave.benchmark.models import (
@@ -41,6 +46,11 @@ from lean_weave.benchmark.offline import (
     worktree_for,
 )
 from lean_weave.benchmark.retrieval import evaluate_retrieval
+from lean_weave.benchmark.results import (
+    aggregate_component_evidence,
+    project_attempt_evidence,
+    project_request_components,
+)
 from lean_weave.logging_setup import get_logger
 from lean_weave.metrics.analytics import aggregate_usage
 from lean_weave.metrics.jsonl import JsonlMetricsCollector
@@ -54,25 +64,6 @@ MAX_REPEATS = 10
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _repo_revision() -> str:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return completed.stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-
-
-def _condition_fingerprint(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _repair_script(manifest, shadow: ContentShadow) -> list[Any]:
@@ -101,16 +92,56 @@ def _script_for(case_id: str, case, shadow: ContentShadow) -> list[Any]:
     return success_script(case.manifest, shadow)
 
 
-def _negative_matches(case_id: str, expected: str, status: str, reason: str) -> bool:
+def _negative_matches(
+    case_id: str,
+    expected: str,
+    status: str,
+    reason: str,
+    *,
+    evidence: Mapping[str, Any] | None = None,
+    changed_paths: Sequence[str] | None = None,
+) -> bool:
+    evidence = evidence or {}
+    dispatch = evidence.get("dispatch")
     if expected == "budget_exhausted":
-        return status in {"budget_exhausted", "failed"}
+        return (
+            status == "budget_exhausted"
+            and "feature_token_limit" in (reason or "")
+            and dispatch == "no_send"
+        )
     if expected == "failed":
         if case_id == "insufficient_context":
-            return status in {"failed", "interrupted"} and (
-                "plan" in reason or "context" in reason or not reason
+            return (
+                status == "failed"
+                and "invalid_plan" in (reason or "")
+                and not changed_paths
+                and evidence.get("verification_sends", 0) == 0
+                and evidence.get("checks_observed", 0) == 0
             )
-        return status in {"failed", "interrupted"}
+        return status == "failed" and not changed_paths
     return False
+
+
+def _changed_paths(workspace: Path) -> list[str]:
+    """Tracked/untracked paths changed inside a managed worktree."""
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(workspace), "status", "--porcelain=v1", "-uall"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    paths: list[str] = []
+    for line in completed.stdout.splitlines():
+        candidate = line[3:].strip()
+        if not candidate or candidate.startswith(".lean-weave"):
+            continue
+        paths.append(candidate)
+    return sorted(paths)
 
 
 def run_offline_arm(
@@ -144,8 +175,21 @@ def run_offline_arm(
         expected = str(manifest.expected_behavior.get("outcome", "success"))
         row.expected_outcome = expected
         row.expected_negative = expected not in {"success", "success_after_repair"}
-        row.fixture_fingerprint = f"sha256:{manifest.expected_head}"
-        row.origin_head = case.origin_head if hasattr(case, "origin_head") else manifest.expected_head
+        row.origin_head = manifest.expected_head
+        row.conditions = capture_arm_conditions(
+            manifest=manifest,
+            origin_head=manifest.expected_head,
+            variant_name=variant.name,
+            context_mode=variant.context_mode,
+            context_extra=variant.context_extra,
+            config_path=case.config_path,
+        )
+        row.fixture_fingerprint = canonical_digest(
+            {
+                "head": row.conditions["fixture"]["pinned_head"],
+                "manifest": row.conditions["fixture"]["manifest_digest"],
+            }
+        )
         shadow = ContentShadow.from_tree(case.origin)
         transport = ScriptedTransport(_script_for(case_id, case, shadow))
         session = FeatureSession(source_cwd=case.origin)
@@ -159,7 +203,7 @@ def run_offline_arm(
         row.observed_outcome = view.status
         row.reason = view.reason
         row.feature_id = view.feature_id
-        row.duration_ms = int((time.monotonic() - started) * 1000)
+        workflow_ms = int((time.monotonic() - started) * 1000)
         worktree = worktree_for(case.origin, view.feature_id)
         journal = _journal(worktree)
         store = JsonCheckpointStore(worktree)
@@ -209,11 +253,28 @@ def run_offline_arm(
             "available": bool(envelope.control.closed_attempts),
             "attempts": len(envelope.control.closed_attempts),
         }
+        row.evidence = project_attempt_evidence(
+            snapshot=snapshot,
+            control=envelope.control,
+            transport_sends=transport.send_count,
+        )
+        changed = _changed_paths(worktree)
+        row.evidence["workspace_changes"] = changed
+        oracle_ms = 0
         if row.expected_negative:
-            row.correct = _negative_matches(case_id, expected, view.status, view.reason)
+            row.correct = _negative_matches(
+                case_id,
+                expected,
+                view.status,
+                view.reason,
+                evidence=row.evidence,
+                changed_paths=_changed_paths(worktree),
+            )
             row.oracle_ok = None
         else:
+            oracle_started = time.monotonic()
             oracle = all(item.ok for item in run_all_oracles(manifest, worktree))
+            oracle_ms = int((time.monotonic() - oracle_started) * 1000)
             row.oracle_ok = oracle
             minimum_retries = int(manifest.expected_behavior.get("min_retry_count", 0) or 0)
             row.correct = bool(
@@ -221,6 +282,16 @@ def run_offline_arm(
                 and oracle
                 and (row.workflow_retries or 0) >= minimum_retries
             )
+        row.evidence["input_components"] = project_request_components(
+            requests=transport.requests,
+            attempts=snapshot.attempts,
+        )
+        row.duration_ms = int((time.monotonic() - started) * 1000)
+        row.evidence["workflow_wall_ms"] = workflow_ms
+        row.evidence["oracle_ms"] = oracle_ms
+        row.evidence["collection_ms"] = max(
+            0, row.duration_ms - workflow_ms - oracle_ms
+        )
         if row.correct is False:
             row.reason = row.reason or "outcome_mismatch"
         log.info(
@@ -251,8 +322,14 @@ def _journal(worktree: Path) -> JsonlMetricsCollector:
 def run_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
     """Run the requested offline workflow schedule once per arm."""
 
-    cases = tuple(spec.get("cases") or CASE_IDS)
-    variants = tuple(spec.get("variants") or WORKFLOW_VARIANT_NAMES)
+    raw_cases = list(spec.get("cases") or CASE_IDS)
+    raw_variants = list(spec.get("variants") or WORKFLOW_VARIANT_NAMES)
+    if len(set(raw_cases)) != len(raw_cases):
+        raise ValueError("duplicate_case_selector")
+    if len(set(raw_variants)) != len(raw_variants):
+        raise ValueError("duplicate_variant_selector")
+    cases = tuple(raw_cases)
+    variants = tuple(raw_variants)
     repeats = int(spec.get("repeats", 1))
     if repeats < 1 or repeats > MAX_REPEATS:
         raise ValueError("repeats_out_of_range")
@@ -261,12 +338,42 @@ def run_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
         raise ValueError(f"unknown_case:{unknown_cases[0]}")
     for name in variants:
         workflow_variant(name)
-    fingerprint = _condition_fingerprint(
+    revision = source_revision()
+    tree_digest = source_tree_digest()
+    binding = release_binding()
+    schedule: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, int]] = set()
+    manifests = {case_id: load_manifest(case_id) for case_id in cases}
+    for repetition in range(1, repeats + 1):
+        order = variants if repetition % 2 else tuple(reversed(variants))
+        for case_id in cases:
+            for variant_name in order:
+                key = (case_id, variant_name, repetition)
+                if key in seen:
+                    raise ValueError("duplicate_schedule_entry")
+                seen.add(key)
+                variant = workflow_variant(variant_name)
+                schedule.append(
+                    scenario_definition(
+                        case_id=case_id,
+                        variant=variant.name,
+                        repetition=repetition,
+                        manifest=manifests[case_id],
+                        context_mode=variant.context_mode,
+                        context_extra=variant.context_extra,
+                    )
+                )
+    fingerprint = canonical_digest(
         {
             "suite": "workflow",
-            "cases": list(cases),
-            "variants": list(variants),
-            "repeats": repeats,
+            "schedule": schedule,
+            "fixtures": {
+                case_id: manifest.expected_head
+                for case_id, manifest in manifests.items()
+            },
+            "source_revision": revision,
+            "source_tree_digest": tree_digest,
+            "release_binding": binding,
         }
     )
     run = BenchmarkRun(
@@ -274,21 +381,25 @@ def run_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
         evidence_source="offline_scripted",
         suite="workflow",
         started_at=_now(),
-        revision=_repo_revision(),
+        revision=revision,
+        source_revision=revision,
         spec={
             "cases": list(cases),
             "variants": list(variants),
             "repeats": repeats,
+            "schedule": schedule,
             "budgets": {"repeats_max": MAX_REPEATS},
+            "source_tree_digest": tree_digest,
+            "release_binding": binding,
         },
         condition_fingerprint=fingerprint,
     )
-    for case_id in cases:
-        for variant in variants:
-            for repetition in range(1, repeats + 1):
-                run.rows.append(
-                    run_offline_arm(case_id, variant, repetition=repetition)
-                )
+    for entry in schedule:
+        run.rows.append(
+            run_offline_arm(
+                entry["case_id"], entry["variant"], repetition=entry["repetition"]
+            )
+        )
     run.rows.sort(key=lambda item: (item.case_id, item.variant, item.repetition))
     positive_cases = {
         case_id
@@ -321,6 +432,7 @@ def run_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
             else None
         ),
         "amortized_evaluable": bool(evaluated and verified_tasks > 0),
+        "input_components": aggregate_component_evidence(run.rows),
     }
     run.completed_at = _now()
     run.incomplete = any(row.status in {"error", "not_started"} for row in run.rows)
@@ -334,113 +446,177 @@ def run_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
 
 
 def run_live_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
-    """Execute explicitly admitted positive arms sequentially.
+    """Execute explicitly admitted live arms sequentially.
 
     The caller must have run the strict admission preflight first. A missing
     usage field, timeout or infrastructure failure stops further billable work.
     """
 
+    from lean_weave.benchmark.live import run_live_case
+
     cases = tuple(spec.get("cases") or ())
     repeats = int(spec.get("repeats", 1))
-    config_paths = tuple(Path(item) for item in spec.get("config_paths") or ())
     deadline_s = float(spec.get("deadline_s") or 0)
+    arms = list(spec.get("arms") or ())
+    config_paths = tuple(Path(item) for item in spec.get("config_paths") or ())
     started = time.monotonic()
+    deadline_at = started + max(0.001, deadline_s)
+    variants = tuple(spec.get("variants") or ())
+    if arms:
+        variants = tuple(dict.fromkeys(str(arm.get("variant")) for arm in arms))
+    schedule: list[dict[str, Any]] = []
+    for repetition in range(1, repeats + 1):
+        order = variants if repetition % 2 else tuple(reversed(variants))
+        for case_id in cases:
+            for variant in order:
+                arm = next(
+                    (
+                        item
+                        for item in arms
+                        if item.get("case_id") == case_id
+                        and item.get("variant") == variant
+                    ),
+                    None,
+                )
+                if arm is None:
+                    continue
+                schedule.append(
+                    {
+                        "suite": "workflow",
+                        "case_id": case_id,
+                        "variant": variant,
+                        "repetition": repetition,
+                        "context_mode": arm.get("context_mode"),
+                        "config_path": arm.get("config_path"),
+                    }
+                )
+    if not schedule:
+        # Legacy single-arm live invocation: one arm per case.
+        for case_id in cases:
+            for repetition in range(1, repeats + 1):
+                schedule.append(
+                    {
+                        "suite": "workflow",
+                        "case_id": case_id,
+                        "variant": "v1-live",
+                        "repetition": repetition,
+                        "context_mode": "v1",
+                        "config_path": None,
+                    }
+                )
+    revision = source_revision()
     run = BenchmarkRun(
         schema_version=BENCHMARK_SCHEMA_VERSION,
         evidence_source="deepseek_live",
         suite="workflow",
         started_at=_now(),
-        revision=_repo_revision(),
+        revision=revision,
+        source_revision=revision,
         spec={
             "cases": list(cases),
+            "variants": list(variants),
             "repeats": repeats,
+            "schedule": schedule,
+            "source_tree_digest": source_tree_digest(),
+            "release_binding": release_binding(),
             "limits": {
                 "max_tokens": spec.get("max_tokens"),
                 "max_cost_usd": spec.get("max_cost_usd"),
                 "deadline_s": deadline_s,
             },
         },
-        condition_fingerprint=_condition_fingerprint(
-            {"suite": "workflow", "cases": list(cases), "repeats": repeats, "mode": "live"}
+        condition_fingerprint=canonical_digest(
+            {"suite": "workflow", "schedule": schedule, "mode": "live"}
         ),
     )
     config_by_case = {
-        path.stem: path for path in config_paths if path.suffix in {".yaml", ".yml"}
+        path.stem.split(".", 1)[0]: path
+        for path in config_paths
+        if path.suffix in {".yaml", ".yml"}
     }
     stop_reason: str | None = None
-    for case_id in cases:
-        for repetition in range(1, repeats + 1):
-            arm_id = f"{case_id}:v2-live:r{repetition}"
-            row = ArmRow(
-                arm_id=arm_id,
-                suite="workflow",
-                case_id=case_id,
-                variant="v2-live",
-                repetition=repetition,
-                expected_outcome="success",
-                provenance="deepseek_live",
-                status="not_started",
-            )
-            if stop_reason is not None:
-                row.reason = stop_reason
-                run.rows.append(row)
-                continue
-            if time.monotonic() - started > deadline_s:
-                stop_reason = "deadline_exceeded"
-                row.reason = stop_reason
-                run.rows.append(row)
-                continue
-            scratch = Path(tempfile.mkdtemp(prefix="lw-live-"))
-            try:
-                origin = materialize(case_id, scratch / "origin").root
-                manifest = load_manifest(case_id)
-                config_path = config_by_case.get(case_id)
-                if config_path is None:
-                    raise RuntimeError("live_config_missing")
-                session = FeatureSession(source_cwd=origin)
-                view = session.start(
-                    manifest.request,
-                    mode="auto",
-                    config_path=config_path,
-                )
-                row.feature_id = view.feature_id
-                row.status = view.status
-                row.observed_outcome = view.status
-                row.reason = view.reason
-                worktree = worktree_for(origin, view.feature_id)
-                snapshot = _journal(worktree).reporting_snapshot(view.feature_id)
-                report = aggregate_usage(snapshot)
-                totals = report.totals
-                if totals is not None:
-                    row.input_tokens = totals.input_tokens
-                    row.output_tokens = totals.output_tokens
-                    row.total_tokens = totals.total_tokens
-                    row.cache_hit_tokens = totals.cache_hit_tokens
-                    row.reasoning_tokens = totals.reasoning_tokens
-                    row.logical_calls = totals.logical_calls
-                    row.retry_attempts = totals.retry_attempts
-                    row.coverage = totals.coverage.complete()
-                oracle = all(
-                    item.ok for item in run_all_oracles(manifest, worktree)
-                )
-                row.oracle_ok = oracle
-                row.correct = view.status == "success" and oracle
-                if not row.coverage.get("total_tokens", False):
-                    stop_reason = "incomplete_usage"
-                if not oracle:
-                    stop_reason = "incorrect_outcome"
-            except Exception as exc:  # noqa: BLE001 - stop on unknown billable work
-                row.status = "error"
-                row.correct = False
-                row.error_class = type(exc).__name__
-                stop_reason = "arm_error"
-            finally:
-                shutil.rmtree(scratch, ignore_errors=True)
+    for entry in schedule:
+        case_id = entry["case_id"]
+        variant = entry["variant"]
+        repetition = entry["repetition"]
+        arm_id = f"{case_id}:{variant}:r{repetition}"
+        row = ArmRow(
+            arm_id=arm_id,
+            suite="workflow",
+            case_id=case_id,
+            variant=variant,
+            repetition=repetition,
+            expected_outcome="success",
+            provenance="deepseek_live",
+            status="not_started",
+            conditions={"context_mode": entry.get("context_mode")},
+        )
+        if stop_reason is not None:
+            row.reason = stop_reason
             run.rows.append(row)
-            if stop_reason is not None:
-                log.warning(
-                    "[Benchmark.live] stop=%s arm=%s", stop_reason, arm_id
-                )
+            continue
+        if time.monotonic() >= deadline_at:
+            stop_reason = "deadline_exceeded"
+            row.reason = stop_reason
+            run.rows.append(row)
+            continue
+        scratch = Path(tempfile.mkdtemp(prefix="lw-live-"))
+        try:
+            config_path = (
+                Path(entry["config_path"])
+                if entry.get("config_path")
+                else config_by_case.get(case_id)
+            )
+            if config_path is None:
+                raise RuntimeError("live_config_missing")
+            outcome = run_live_case(
+                case_id,
+                scratch,
+                config_path=config_path,
+                output_dir=scratch,
+                deadline_s=deadline_s,
+                deadline_at=deadline_at,
+                variant=variant,
+                context_mode=entry.get("context_mode"),
+            )
+            row.feature_id = outcome.feature_id
+            row.status = outcome.status
+            row.observed_outcome = outcome.status
+            row.reason = outcome.reason
+            row.oracle_ok = outcome.oracle_ok
+            row.input_tokens = outcome.input_tokens
+            row.output_tokens = outcome.output_tokens
+            row.total_tokens = outcome.total_tokens
+            row.coverage = outcome.coverage
+            row.evidence = outcome.evidence
+            row.logical_calls = outcome.logical_calls
+            row.retry_attempts = outcome.retry_attempts
+            row.duration_ms = outcome.duration_ms
+            row.verification_status = outcome.verification_status
+            row.correct = bool(
+                outcome.status == "success"
+                and outcome.oracle_ok is True
+                and outcome.coverage.get("total_tokens", False)
+                and outcome.evidence.get("dispatch") != "unknown"
+            )
+            if outcome.error == "live_timeout":
+                stop_reason = "deadline_exceeded"
+            elif outcome.evidence.get("dispatch") == "unknown":
+                stop_reason = "unknown_dispatch"
+            elif not outcome.coverage.get("total_tokens", False):
+                stop_reason = "incomplete_usage"
+            elif outcome.oracle_ok is not True:
+                stop_reason = "incorrect_outcome"
+        except Exception as exc:  # noqa: BLE001 - stop on unknown billable work
+            row.status = "error"
+            row.correct = False
+            row.error_class = type(exc).__name__
+            stop_reason = "arm_error"
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        run.rows.append(row)
+        if stop_reason is not None:
+            log.warning("[Benchmark.live] stop=%s arm=%s", stop_reason, arm_id)
     run.completed_at = _now()
     run.incomplete = bool(stop_reason) or any(
         row.status == "not_started" for row in run.rows
@@ -451,52 +627,106 @@ def run_live_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
 def run_retrieval_matrix(spec: Mapping[str, Any]) -> BenchmarkRun:
     from lean_weave.benchmark.retrieval import VARIANT_NAMES, load_cases
 
-    case_ids = tuple(spec.get("cases") or [item.id for item in load_cases()])
-    variants = tuple(spec.get("variants") or VARIANT_NAMES)
+    raw_cases = list(spec.get("cases") or [item.id for item in load_cases()])
+    raw_variants = list(spec.get("variants") or VARIANT_NAMES)
+    if len(set(raw_cases)) != len(raw_cases):
+        raise ValueError("duplicate_case_selector")
+    if len(set(raw_variants)) != len(raw_variants):
+        raise ValueError("duplicate_variant_selector")
+    known = {item.id for item in load_cases()}
+    unknown = [item for item in raw_cases if item not in known]
+    if unknown:
+        raise ValueError(f"unknown_case:{unknown[0]}")
+    for name in raw_variants:
+        if name not in VARIANT_NAMES:
+            raise ValueError(f"unknown_retrieval_variant:{name}")
+    repeats = int(spec.get("repeats", 1))
+    if repeats < 1 or repeats > MAX_REPEATS:
+        raise ValueError("repeats_out_of_range")
+    revision = source_revision()
+    tree_digest = source_tree_digest()
+    binding = release_binding()
+    schedule: list[dict[str, Any]] = []
+    for repetition in range(1, repeats + 1):
+        order = raw_variants if repetition % 2 else list(reversed(raw_variants))
+        for case_id in raw_cases:
+            for variant in order:
+                schedule.append(
+                    {
+                        "suite": "retrieval",
+                        "case_id": case_id,
+                        "variant": variant,
+                        "repetition": repetition,
+                        "scenario_digest": canonical_digest(
+                            {
+                                "suite": "retrieval",
+                                "case_id": case_id,
+                                "variant": variant,
+                                "repetition": repetition,
+                            }
+                        ),
+                    }
+                )
     run = BenchmarkRun(
         schema_version=BENCHMARK_SCHEMA_VERSION,
         evidence_source="local_estimate",
         suite="retrieval",
         started_at=_now(),
-        revision=_repo_revision(),
-        spec={"cases": list(case_ids), "variants": list(variants)},
-        condition_fingerprint=_condition_fingerprint(
-            {"suite": "retrieval", "cases": list(case_ids), "variants": list(variants)}
+        revision=revision,
+        source_revision=revision,
+        spec={
+            "cases": raw_cases,
+            "variants": raw_variants,
+            "repeats": repeats,
+            "schedule": schedule,
+            "budgets": {"repeats_max": MAX_REPEATS},
+            "source_tree_digest": tree_digest,
+            "release_binding": binding,
+        },
+        condition_fingerprint=canonical_digest(
+            {
+                "suite": "retrieval",
+                "schedule": schedule,
+                "source_revision": revision,
+                "source_tree_digest": tree_digest,
+                "release_binding": binding,
+            }
         ),
     )
-    scratch = Path(tempfile.mkdtemp(prefix="lw-retrieval-matrix-"))
-    try:
-        for case_id in case_ids:
-            for variant in variants:
-                started = time.monotonic()
-                row = ArmRow(
-                    arm_id=f"{case_id}:{variant}",
-                    suite="retrieval",
-                    case_id=case_id,
-                    variant=variant,
-                    repetition=1,
-                    expected_outcome="local_estimate",
-                    provenance="local_estimate",
-                    status="complete",
-                )
-                try:
-                    payload = evaluate_retrieval(case_id, variant, scratch)
-                    row.observed_outcome = payload["pack"]["status"]
-                    row.correct = None
-                    row.retrieval = payload
-                    row.fixture_fingerprint = payload.get("fixture_fingerprint")
-                    row.conditions = payload.get("conditions", {})
-                    row.duration_ms = payload.get("timing_ms", {}).get("total")
-                except Exception as exc:  # noqa: BLE001 - keep every scheduled row
-                    row.status = "error"
-                    row.error_class = type(exc).__name__
-                    row.correct = False
-                row.duration_ms = row.duration_ms or int(
-                    (time.monotonic() - started) * 1000
-                )
-                run.rows.append(row)
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+    for entry in schedule:
+        case_id = entry["case_id"]
+        variant = entry["variant"]
+        repetition = entry["repetition"]
+        started = time.monotonic()
+        row = ArmRow(
+            arm_id=f"{case_id}:{variant}:r{repetition}",
+            suite="retrieval",
+            case_id=case_id,
+            variant=variant,
+            repetition=repetition,
+            expected_outcome="local_estimate",
+            provenance="local_estimate",
+            status="complete",
+        )
+        arm_scratch = Path(tempfile.mkdtemp(prefix="lw-retrieval-arm-"))
+        try:
+            payload = evaluate_retrieval(case_id, variant, arm_scratch)
+            row.observed_outcome = payload["pack"]["status"]
+            row.correct = None
+            row.retrieval = payload
+            row.fixture_fingerprint = payload.get("fixture_fingerprint")
+            row.conditions = payload.get("conditions", {})
+            row.duration_ms = payload.get("timing_ms", {}).get("total")
+        except Exception as exc:  # noqa: BLE001 - keep every scheduled row
+            row.status = "error"
+            row.error_class = type(exc).__name__
+            row.correct = False
+        finally:
+            shutil.rmtree(arm_scratch, ignore_errors=True)
+        row.duration_ms = row.duration_ms or int(
+            (time.monotonic() - started) * 1000
+        )
+        run.rows.append(row)
     run.rows.sort(key=lambda item: (item.case_id, item.variant, item.repetition))
     run.completed_at = _now()
     run.incomplete = any(row.status == "error" for row in run.rows)

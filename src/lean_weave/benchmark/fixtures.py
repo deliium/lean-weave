@@ -33,6 +33,8 @@ CASE_IDS: tuple[str, ...] = (
     "verify_then_repair",
     "insufficient_context",
     "budget_exhaustion",
+    "refactor_preserve_behavior",
+    "test_generation",
 )
 
 

@@ -119,3 +119,4 @@ wl map dependencies app
 - [Code index](code-index.md) — cache lifecycle and isolation
 - [Architecture](architecture.md) — composition with ContextProvider
 - [Getting Started](getting-started.md) — install and offline checks
+- [V2 readiness](v2-readiness.md) — measured map/graph and cache observations

@@ -170,6 +170,20 @@ Cache diagnostics use the configured lean-weave log level
 event, schema number, and bounded reason codes. They never include SQL text,
 database paths, task text, source payloads, or raw exception messages.
 
+## V2 validation status
+
+The cache workload now records every wall/CPU sample, priming time, per-kind
+hits/misses, pack-build and lookup counters, and separate initial-build,
+unchanged-update, edit, rename, delete, recreate and clean-rebuild timings for
+the index. Measured on two tiny packaged cases: warm reuse removes counted
+ranking work but is not uniformly faster than disabled mode (for example
+`multi_file_banner/indexed` measured 8.66 ms warm vs 8.67 ms disabled median).
+A bounded synthetic workload (`python -m benchmarks.context_cache --json --scaled`)
+adds 100 and 1,000 off-scope files plus a 50-importer dense tree. Fact extraction
+grows with fanout while ranking and pack work stay bounded; output signatures
+remain identical. No cache-speed default was changed. See
+[v2-readiness.md](v2-readiness.md).
+
 ## See also
 
 - [code-index.md](code-index.md) — the separate disposable source index

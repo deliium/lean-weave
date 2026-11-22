@@ -160,3 +160,12 @@ emits a versioned machine view. Diagnostics go to stderr.
 Control verbosity with `LEAN_WEAVE_LOG_LEVEL` (fallback `LOG_LEVEL`). Logs use
 structured reason codes and counts only — never plan prose, raw Git/check
 output, credentials, or file contents.
+
+## Release validation
+
+Paired V1/V2 workflow runs exercise review/approve, stale approval, bounded
+repair, budget refusal, interruption/resume, uncertain effects and worktree
+isolation through the existing CLI suites. Current verdict and evidence are in
+[v2-readiness.md](v2-readiness.md). Resume rules are unchanged: a checkpoint
+must continue with the same mode and authority, and uncertain effects are never
+replayed.

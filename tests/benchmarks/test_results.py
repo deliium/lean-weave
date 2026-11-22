@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from lean_weave.metrics.jsonl import JsonlMetricsCollector
@@ -157,3 +158,38 @@ def test_checkpoint_retry_count_and_human_summary(tmp_path):
     path = tmp_path / "out.json"
     write_report(path, report)
     assert path.is_file()
+
+
+def test_attempt_evidence_dispatch_states_and_bounded_context(tmp_path):
+    from lean_weave.benchmark.results import project_attempt_evidence
+
+    collector = _collector(tmp_path)
+    empty = collector.reporting_snapshot("none")
+    no_send = project_attempt_evidence(snapshot=empty, transport_sends=0)
+    assert no_send["dispatch"] == "no_send"
+    assert no_send["transport_sends"] == 0
+    assert no_send["reservations"] == 0
+
+    absent = project_attempt_evidence(
+        snapshot=empty.model_copy(update={"available": False})
+    )
+    assert absent["dispatch"] == "unknown"
+
+    contradictory = project_attempt_evidence(snapshot=empty, transport_sends=1)
+    assert contradictory["dispatch"] == "unknown"
+
+    _reserve(collector, feature="f2")
+    observed_snapshot = collector.reporting_snapshot("f2")
+    observed = project_attempt_evidence(snapshot=observed_snapshot, transport_sends=1)
+    assert observed["dispatch"] == "unknown"  # unresolved reservation
+    assert observed["unresolved"] == 1
+
+    reservation = _reserve(collector, feature="f3")
+    collector.finalize_attempt(reservation, status="success", usage=_usage())
+    completed = project_attempt_evidence(
+        snapshot=collector.reporting_snapshot("f3"), transport_sends=1
+    )
+    assert completed["dispatch"] == "observed"
+    assert completed["logical_calls"] == 1
+    assert completed["attempts"][0]["total_tokens"] == 15
+    assert "messages" not in json.dumps(completed)

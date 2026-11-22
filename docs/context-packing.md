@@ -250,6 +250,15 @@ Omit the packed flags, or set `context.packing.cli_default: false`. The V1
 builder, `ContextPack`, `ContextProvider.build`, stage prompts, and workflow
 checkpoints are unchanged. No cleanup or migration is required.
 
+## V2 validation status
+
+Pack observations now include selected/unique source tokens, pack-estimated
+input, dedup decisions, emitted duplicate lines, missing required symbols and
+dependencies, map-row count and section token estimates. The paired release
+run is reported in [v2-readiness.md](v2-readiness.md); a holdout required
+dependency is currently missing because the enclosing class declaration is not
+packed.
+
 ## See also
 
 - [context-retrieval.md](context-retrieval.md) — ranked retrieval inputs

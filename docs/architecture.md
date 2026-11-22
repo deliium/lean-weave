@@ -272,6 +272,16 @@ wrapper. `wl benchmark run` is offline by default; live evaluation requires
 explicit token/cost/deadline limits, external pricing, fixture configs and
 environment credentials, and never replaces existing output files.
 
+### V2 release validation
+
+The V2 offline stack is exercised end to end by a paired V1/V2 workflow matrix
+with fixture/condition digests, per-metric coverage, declared schedules and
+version-2 regression policies. Retrieval quality is reported separately by
+split and K, and cache/index updates are measured without provider calls.
+The current assessment is in [v2-readiness.md](v2-readiness.md): V1 remains the
+default; V2 is not release-ready because the retrieval holdout split regresses
+required-dependency coverage. Live DeepSeek savings remain unvalidated.
+
 ## MVP 1 exclusions
 
 No MCP, ACP, Docker orchestration, background workers, multi-agent routers, or nested AI Factory agent launchers.
@@ -292,3 +302,4 @@ No MCP, ACP, Docker orchestration, background workers, multi-agent routers, or n
 - [Standalone code tools](code-tools.md) — reads, patches, checks, Git metadata
 - [Token budget principles](../.ai-factory/references/v1-01-token-budget-principles.md) — ContextProvider rules
 - [MVP 1 acceptance criteria](../.ai-factory/references/v1-01-mvp1-acceptance-criteria.md) — architecture gate checklist
+- [V2 readiness](v2-readiness.md) — release validation verdict and evidence

@@ -22,41 +22,41 @@ from benchmarks.offline import (
 )
 
 
-def _run_v2_success(case, monkeypatch):
-    transport = ScriptedTransport(success_script(case.manifest, case.shadow))
-    install_gateway_transport(monkeypatch, transport)
-    bind_feature_session(monkeypatch, case.origin)
-    result = invoke_cli(
-        "--config",
-        str(case.config_path),
-        "feature",
-        case.manifest.request,
-        "--auto",
-    )
-    return transport, result
+def test_multi_file_feature_v1_and_v2_are_paired(tmp_path: Path, monkeypatch):
+    def run_mode(mode: str):
+        case = prepare_case("multi_file_feature", tmp_path / mode, context_mode=mode)
+        transport = ScriptedTransport(success_script(case.manifest, case.shadow))
+        install_gateway_transport(monkeypatch, transport)
+        bind_feature_session(monkeypatch, case.origin)
+        result = invoke_cli(
+            "--config",
+            str(case.config_path),
+            "feature",
+            case.manifest.request,
+            "--auto",
+        )
+        assert result.exit_code == 0, result.stdout + result.stderr
+        view = parse_view(result.stdout)
+        assert view["status"] == "success"
+        worktree = worktree_for(case.origin, view["feature_id"])
+        assert all(item.ok for item in run_all_oracles(case.manifest, worktree))
+        assert journal_for(worktree).spent(view["feature_id"]) > 0
+        assert all(request.get("stage") != "verify" for request in transport.requests)
+        assert not any(
+            call.get("function", {}).get("name") in {"read_range", "read_symbol"}
+            for request in transport.requests
+            for message in request.get("messages", [])
+            if message.get("role") == "assistant"
+            for call in (message.get("tool_calls") or [])
+        )
+        return transport
 
-
-def test_v2_multi_file_feature_matches_v1_oracles_and_call_shape(tmp_path: Path, monkeypatch):
-    case = prepare_case("multi_file_feature", tmp_path, context_mode="v2")
-    transport, result = _run_v2_success(case, monkeypatch)
-    assert result.exit_code == 0, result.stdout + result.stderr
-    view = parse_view(result.stdout)
-    assert view["status"] == "success"
-    worktree = worktree_for(case.origin, view["feature_id"])
-    assert all(item.ok for item in run_all_oracles(case.manifest, worktree))
-    assert transport.send_count == 5
-    assert journal_for(worktree).spent(view["feature_id"]) > 0
-    # No verification or diagnosis model calls.
-    assert all(request.get("stage") != "verify" for request in transport.requests)
-    # The first patch in each task uses the revision exposed by the request,
-    # not an extra read round.
-    assert not any(
-        call.get("function", {}).get("name") in {"read_range", "read_symbol"}
-        for request in transport.requests
-        for message in request.get("messages", [])
-        if message.get("role") == "assistant"
-        for call in (message.get("tool_calls") or [])
-    )
+    v1 = run_mode("v1")
+    v2 = run_mode("v2")
+    # The scripted call shape is identical; context selection is the only
+    # changed condition.
+    assert v1.send_count == v2.send_count
+    assert len(v2.requests[0]["messages"]) == len(v1.requests[0]["messages"])
 
 
 def test_v2_review_pause_and_resume_does_not_replay_planning(tmp_path: Path, monkeypatch):

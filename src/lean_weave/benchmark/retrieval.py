@@ -724,6 +724,41 @@ def _v1_spans(root: Path, query: str, config: ContextConfig) -> tuple[list[str],
     return files, symbols, spans, built.pack.estimated_tokens
 
 
+def _overlap_lines(spans: Sequence[Mapping[str, Any]]) -> int:
+    """Line count emitted more than once by pre-union overlapping spans."""
+
+    grouped: dict[str, list[tuple[int, int]]] = {}
+    for span in spans:
+        path = str(span["path"])
+        start = int(span.get("start_line") or 1)
+        end = int(span.get("end_line") or start)
+        if end >= start:
+            grouped.setdefault(path, []).append((start, end))
+    total = 0
+    for values in grouped.values():
+        covered: set[int] = set()
+        emitted = 0
+        for start, end in values:
+            emitted += end - start + 1
+            covered.update(range(start, end + 1))
+        total += max(0, emitted - len(covered))
+    return total
+
+
+def _missing_symbols(
+    selected_union: dict[str, list[tuple[int, int]]],
+    symbols: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    missing: list[str] = []
+    for item in symbols:
+        path = str(item.get("path"))
+        start = int(item.get("start_line") or 1)
+        end = int(item.get("end_line") or start)
+        if not _covered(selected_union, {"path": path, "start_line": start, "end_line": end}):
+            missing.append(f"{path}:{start}:{item.get('qualified_name')}")
+    return sorted(missing)
+
+
 def _v2_spans(
     root: Path,
     case: Case,
@@ -752,21 +787,30 @@ def _v2_spans(
     observations: dict[str, Any] = {
         "ranked_visible": False,
         "cache": cache_counts,
+        "graph_loaded": False,
+        "index_built": False,
     }
     repository = Repository(root, config, strict_source=True)
     index = CodeIndex(root, cache_base=cache_base, context_config=config)
-    if variant.use_graph or (variant.map_tokens or config.packing.map_tokens) > 0:
+    effective_map_tokens = config.packing.map_tokens
+    need_index = variant.use_graph or effective_map_tokens > 0
+    if need_index:
         try:
             index.build()
+            observations["index_built"] = True
         except Exception:  # noqa: BLE001 - evaluation degrades rather than fails
             observations["index_error"] = True
     service = RepositoryMap(index)
-    load_graph = (
-        (lambda scan: service.graph_for_retrieval_scan(scan))
-        if variant.use_graph
-        else None
+
+    def load_graph(scan):
+        observations["graph_loaded"] = True
+        return service.graph_for_retrieval_scan(scan)
+
+    retriever = ContextRetriever(
+        repository,
+        load_graph=load_graph if variant.use_graph else None,
+        cache=cache,
     )
-    retriever = ContextRetriever(repository, load_graph=load_graph, cache=cache)
     observed: dict[str, Any] = {"result": None}
 
     def on_ranked(result) -> None:
@@ -807,6 +851,8 @@ def _v2_spans(
             for fragment in pack.fragments
         ]
         observations["pack_metrics"] = pack.metrics.model_dump(mode="json")
+        observations["map_rows"] = len(pack.map_rows)
+        observations["section_tokens"] = dict(pack.metrics.section_tokens)
         observations["selected_files"] = len({fragment.path for fragment in pack.fragments})
         observations["selected_symbols"] = sum(
             1 for fragment in pack.fragments if fragment.kind == "definition"
@@ -919,6 +965,9 @@ def evaluate_retrieval(
         missing_dependencies = sum(
             1 for item in case.required_dependencies if not _covered(selected_union, item)
         )
+        missing_symbols = _missing_symbols(selected_union, case.symbols)
+        pack_input_tokens = observations.get("pack_metrics", {}).get("input_tokens")
+        deduplicated = observations.get("pack_metrics", {}).get("deduplicated")
         return {
             "schema_version": 1,
             "case_id": case.id,
@@ -930,7 +979,7 @@ def evaluate_retrieval(
             "provenance": "local_estimate",
             "judge_schema_version": case.judge_schema_version,
             "fixture_fingerprint": case.fingerprint,
-            "conditions": spec.conditions(base_config),
+            "conditions": spec.conditions(config),
             "estimator": "conservative_estimate",
             "ranking": {
                 "files": file_scores,
@@ -946,6 +995,10 @@ def evaluate_retrieval(
                 "selected_files": observations.get("selected_files"),
                 "selected_symbols": observations.get("selected_symbols"),
                 "selected_source_tokens": selected_tokens,
+                "unique_source_tokens": selected_tokens,
+                "pack_estimated_input_tokens": pack_input_tokens,
+                "deduplicated": deduplicated,
+                "emitted_duplicate_lines": _overlap_lines(spans),
                 "relevant_source_tokens": relevant_tokens,
                 "relevant_token_ratio": (
                     round(relevant_tokens / selected_tokens, 4)
@@ -954,6 +1007,10 @@ def evaluate_retrieval(
                 ),
                 "required_dependency_count": len(case.required_dependencies),
                 "missing_dependency_count": missing_dependencies,
+                "required_symbol_count": len(case.symbols),
+                "missing_symbol_count": len(missing_symbols),
+                "missing_symbols": missing_symbols,
+                "map_rows": observations.get("map_rows"),
                 "available": bool(selected_tokens),
             },
             "cache": {

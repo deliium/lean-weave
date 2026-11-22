@@ -239,3 +239,26 @@ def test_graph_map_rows_and_relation_evidence(project: Path):
         assert evidence
         assert evidence[0].related_path in {"pkg/core.py", "pkg/other.py"}
         assert evidence[0].edge_id.startswith("edge:sha256:")
+
+
+def test_anchor_resolution_includes_enclosing_declaration():
+    snapshot = FileSnapshot(
+        path="pkg/core.py",
+        text="class A:\n    def m(self):\n        return 1\n",
+        digest="sha256:x",
+        size_bytes=0,
+    )
+    spans = _python_spans(snapshot)
+    chosen = resolve_anchor_span(spans, 3)
+    assert chosen is not None
+    assert chosen.symbol == "A.m"
+    assert (chosen.start, chosen.end) == (1, 3)
+    plain = FileSnapshot(
+        path="pkg/free.py",
+        text="def f():\n    return 1\n",
+        digest="sha256:y",
+        size_bytes=0,
+    )
+    free = resolve_anchor_span(_python_spans(plain), 2)
+    assert free is not None
+    assert (free.start, free.end) == (1, 2)

@@ -1,0 +1,53 @@
+{
+  "version": 2,
+  "gates": [
+    {
+      "metric": "file_recall_at_5_development_worst_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "file_recall_at_5_holdout_worst_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "symbol_recall_at_5_development_worst_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "symbol_recall_at_5_holdout_worst_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "missing_dependency_count_development_worst_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "missing_dependency_count_development_total_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "missing_dependency_count_holdout_worst_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    },
+    {
+      "metric": "missing_dependency_count_holdout_total_delta",
+      "provenance": "local_estimate",
+      "scope": "suite",
+      "max_regression": 0
+    }
+  ]
+}
