@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,6 +23,15 @@ from lean_weave.contracts._types import (
     LLMRequest,
     LLMResponse,
     ThinkingMode,
+)
+from lean_weave.contracts.deepseek_request import (
+    MODEL_CAPABILITIES,
+    NormalizedChatRequest,
+    PackedRequestGuard,
+    normalize_chat_request,
+    project_wire,
+    resolve_thinking,
+    wire_fingerprint,
 )
 from lean_weave.errors import (
     BudgetExceededError,
@@ -51,22 +59,7 @@ log = get_logger("providers.deepseek")
 _MAX_RETRY_AFTER_S = 30.0
 _MAX_BACKOFF_S = 2.0
 _BASE_BACKOFF_S = 0.25
-_REASONING_EFFORTS = {"low", "medium", "high"}
 _VALID_STAGES = {"plan", "implement", "verify", "retry", "probe"}
-
-
-@dataclass(frozen=True)
-class ModelCapability:
-    supports_thinking: bool = True
-    supports_tools: bool = True
-    supports_json_object: bool = True
-
-
-#: Explicit local capability decision; no discovery call is made at runtime.
-MODEL_CAPABILITIES: dict[str, ModelCapability] = {
-    "deepseek-flash": ModelCapability(),
-    "deepseek-v4-pro": ModelCapability(),
-}
 
 
 @dataclass(frozen=True)
@@ -213,39 +206,31 @@ class DeepSeekProvider:
             raise UnsupportedLLMRequest("Gateway options must be a mapping")
 
         thinking = self._thinking_mode(request, options, capability)
-        reasoning_effort = request.get("reasoning_effort")
-        if reasoning_effort is not None:
-            if not isinstance(reasoning_effort, str) or reasoning_effort not in _REASONING_EFFORTS:
-                raise UnsupportedLLMRequest("Unsupported reasoning effort")
-            if thinking != "enabled":
-                raise UnsupportedLLMRequest("Reasoning effort requires thinking mode")
-
-        response_format, result_model = self._structured_mode(request)
-        tools = request.get("tools")
-        if tools is not None:
-            if not capability.supports_tools:
-                raise UnsupportedLLMRequest("Model does not support tools")
-            tools = self._validate_tools(tools)
-        if tools is not None and response_format is not None:
-            raise UnsupportedLLMRequest("Tools and JSON object mode cannot be combined")
-        if response_format is not None and not capability.supports_json_object:
-            raise UnsupportedLLMRequest("Model does not support JSON object mode")
-
-        messages = self._validate_messages(request.get("messages"), thinking, tools is not None)
         output_cap = self._output_cap(request, options)
+        normalized = normalize_chat_request(
+            model=model,
+            messages=request.get("messages"),
+            tools=request.get("tools"),
+            response_format=request.get("response_format"),
+            result_model=request.get("result_model"),
+            thinking=thinking,
+            reasoning_effort=request.get("reasoning_effort"),
+            output_cap=output_cap,
+            max_output_tokens=self._config.max_output_tokens,
+        )
         retry_limit = self._retry_limit(options)
 
         return PreparedRequest(
             feature_id=feature_id,
             stage=stage,
-            model=model,
-            messages=messages,
-            tools=tools,
-            response_format=response_format,
-            result_model=result_model,
-            thinking=thinking,
-            reasoning_effort=reasoning_effort if thinking == "enabled" else None,
-            output_cap=output_cap,
+            model=normalized.model,
+            messages=normalized.messages,
+            tools=normalized.tools,
+            response_format=normalized.response_format,
+            result_model=normalized.result_model,
+            thinking=normalized.thinking,
+            reasoning_effort=normalized.reasoning_effort,
+            output_cap=normalized.output_cap,
             retry_limit=retry_limit,
         )
 
@@ -257,143 +242,14 @@ class DeepSeekProvider:
             raise UnsupportedLLMRequest("The reserved probe feature ID cannot use a workflow stage")
 
     def _thinking_mode(
-        self, request: LLMRequest, options: Mapping[str, Any], capability: ModelCapability
+        self, request: LLMRequest, options: Mapping[str, Any], capability: Any
     ) -> ThinkingMode:
-        selected = options.get("thinking")
-        if selected is None:
-            selected = request.get("thinking")
-        if selected is None:
-            selected = "enabled" if self._config.thinking else "disabled"
-        if selected not in {"enabled", "disabled"}:
-            raise UnsupportedLLMRequest("Unsupported thinking mode")
-        if selected == "enabled" and not capability.supports_thinking:
-            raise UnsupportedLLMRequest("Model does not support thinking mode")
-        return selected
-
-    def _structured_mode(
-        self, request: LLMRequest
-    ) -> tuple[dict[str, Any] | None, type[Any] | None]:
-        response_format = request.get("response_format")
-        result_model = request.get("result_model")
-        if result_model is not None and (
-            not isinstance(result_model, type) or not hasattr(result_model, "model_validate")
-        ):
-            raise UnsupportedLLMRequest("Result validator must be a Pydantic model class")
-        if response_format is None:
-            if result_model is not None:
-                raise UnsupportedLLMRequest("A result validator requires JSON object mode")
-            return None, None
-        if not isinstance(response_format, Mapping):
-            raise UnsupportedLLMRequest("Unsupported response format")
-        if response_format.get("type") != "json_object" or set(response_format) != {"type"}:
-            raise UnsupportedLLMRequest("Only JSON object mode is supported")
-        return {"type": "json_object"}, result_model
-
-    @staticmethod
-    def _validate_tools(tools: Any) -> list[dict[str, Any]] | None:
-        if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
-            raise UnsupportedLLMRequest("Tools must be a sequence")
-        if not tools:
-            return None
-        normalized: list[dict[str, Any]] = []
-        for tool in tools:
-            if not isinstance(tool, Mapping) or tool.get("type") != "function":
-                raise UnsupportedLLMRequest("Only function tools are supported")
-            function = tool.get("function")
-            if not isinstance(function, Mapping):
-                raise UnsupportedLLMRequest("Function tool schema is malformed")
-            name = function.get("name")
-            if not isinstance(name, str) or not name.strip():
-                raise UnsupportedLLMRequest("Function tool name is required")
-            normalized.append(copy.deepcopy(dict(tool)))
-        return normalized
-
-    @staticmethod
-    def _validate_messages(
-        messages: Any, thinking: ThinkingMode, has_tools: bool
-    ) -> list[dict[str, Any]]:
-        if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)) or not messages:
-            raise UnsupportedLLMRequest("Explicit, non-empty messages are required")
-        normalized: list[dict[str, Any]] = []
-        call_ids: set[str] = set()
-        for message in messages:
-            if not isinstance(message, Mapping):
-                raise UnsupportedLLMRequest("Messages must be mappings")
-            role = message.get("role")
-            if role not in {"system", "user", "assistant", "tool"}:
-                raise UnsupportedLLMRequest("Unsupported message role")
-            content = message.get("content")
-            if content is not None and not isinstance(content, str):
-                raise UnsupportedLLMRequest("Message content must be text or null")
-            item: dict[str, Any] = {"role": role, "content": content}
-            reasoning = message.get("reasoning_content")
-            if reasoning is not None and not isinstance(reasoning, str):
-                raise UnsupportedLLMRequest("Reasoning content must be text")
-            if role == "assistant":
-                tool_calls = message.get("tool_calls")
-                if tool_calls is not None:
-                    calls = DeepSeekProvider._normalize_tool_calls(tool_calls)
-                    item["tool_calls"] = calls
-                    if thinking == "enabled" and not isinstance(reasoning, str):
-                        raise UnsupportedLLMRequest(
-                            "Thinking tool replay requires prior reasoning content"
-                        )
-                    for call in calls:
-                        call_ids.add(call["id"])
-                if thinking == "enabled" and reasoning is not None:
-                    item["reasoning_content"] = reasoning
-            elif role == "tool":
-                tool_call_id = message.get("tool_call_id")
-                if not isinstance(tool_call_id, str) or not tool_call_id:
-                    raise UnsupportedLLMRequest("Tool messages require a tool call ID")
-                if thinking == "enabled" and has_tools and tool_call_id not in call_ids:
-                    raise UnsupportedLLMRequest("Tool result has no matching assistant tool call")
-                item["tool_call_id"] = tool_call_id
-            elif reasoning is not None:
-                # Reasoning is an assistant in-flight field only.
-                raise UnsupportedLLMRequest("Reasoning content is only valid on assistant messages")
-            normalized.append(item)
-
-        if thinking == "enabled" and has_tools:
-            tool_ids = {
-                item["tool_call_id"]
-                for item in normalized
-                if item.get("role") == "tool" and "tool_call_id" in item
-            }
-            if not call_ids.issubset(tool_ids):
-                raise UnsupportedLLMRequest("Thinking tool replay requires matching tool results")
-        return normalized
-
-    @staticmethod
-    def _normalize_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
-        if not isinstance(tool_calls, Sequence) or isinstance(tool_calls, (str, bytes)):
-            raise UnsupportedLLMRequest("Assistant tool calls must be a sequence")
-        normalized: list[dict[str, Any]] = []
-        for call in tool_calls:
-            if not isinstance(call, Mapping):
-                raise UnsupportedLLMRequest("Assistant tool call is malformed")
-            identifier = call.get("id")
-            function = call.get("function")
-            if not isinstance(identifier, str) or not identifier:
-                raise UnsupportedLLMRequest("Assistant tool call ID is required")
-            if not isinstance(function, Mapping):
-                raise UnsupportedLLMRequest("Assistant tool call function is malformed")
-            name = function.get("name")
-            arguments = function.get("arguments")
-            if not isinstance(name, str) or not name:
-                raise UnsupportedLLMRequest("Assistant tool call name is required")
-            if isinstance(arguments, Mapping):
-                arguments = json.dumps(arguments, separators=(",", ":"))
-            if not isinstance(arguments, str):
-                raise UnsupportedLLMRequest("Assistant tool call arguments must be text")
-            normalized.append(
-                {
-                    "id": identifier,
-                    "type": "function",
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
-        return normalized
+        return resolve_thinking(
+            requested=request.get("thinking"),
+            option=options.get("thinking"),
+            configured=self._config.thinking,
+            capability=capability,
+        )
 
     def _output_cap(self, request: LLMRequest, options: Mapping[str, Any]) -> int:
         requested_values = [
@@ -427,9 +283,10 @@ class DeepSeekProvider:
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         prepared = self._prepare(request)
-        client = self._ensure_client()
         request_id = self._id_factory()
         wire = self._wire_request(prepared)
+        self._validate_packed_guard(request, prepared, wire)
+        client = self._ensure_client()
         estimated_input = estimate_request_tokens(
             messages=wire["messages"],
             tools=wire.get("tools"),
@@ -575,19 +432,52 @@ class DeepSeekProvider:
             )
 
     def _wire_request(self, prepared: PreparedRequest) -> dict[str, Any]:
-        wire: dict[str, Any] = {
-            "model": prepared.model,
-            "messages": prepared.messages,
-            "max_tokens": prepared.output_cap,
-            "extra_body": {"thinking": {"type": prepared.thinking}},
-        }
-        if prepared.tools is not None:
-            wire["tools"] = prepared.tools
-        if prepared.response_format is not None:
-            wire["response_format"] = prepared.response_format
-        if prepared.reasoning_effort is not None:
-            wire["reasoning_effort"] = prepared.reasoning_effort
-        return wire
+        return project_wire(
+            NormalizedChatRequest(
+                model=prepared.model,
+                messages=prepared.messages,
+                tools=prepared.tools,
+                response_format=prepared.response_format,
+                result_model=prepared.result_model,
+                thinking=prepared.thinking,
+                reasoning_effort=prepared.reasoning_effort,
+                output_cap=prepared.output_cap,
+            )
+        )
+
+    def _validate_packed_guard(
+        self,
+        request: LLMRequest,
+        prepared: PreparedRequest,
+        wire: Mapping[str, Any],
+    ) -> None:
+        """Reject drifted packed input before client, reservation or transport."""
+
+        if "packed_guard" not in request:
+            return
+        guard = request.get("packed_guard")
+        if not isinstance(guard, PackedRequestGuard):
+            raise UnsupportedLLMRequest("Packed request guard is malformed")
+        for value in (
+            guard.input_tokens,
+            guard.output_tokens,
+            guard.total_tokens,
+            guard.output_cap,
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise UnsupportedLLMRequest("Packed request guard limits are invalid")
+        if guard.input_tokens + guard.output_tokens > guard.total_tokens:
+            raise UnsupportedLLMRequest("Packed request guard limits are inconsistent")
+        if guard.model != prepared.model or guard.output_cap != prepared.output_cap:
+            raise UnsupportedLLMRequest("Packed request model or output cap changed")
+        if guard.expected_fingerprint != wire_fingerprint(wire):
+            raise UnsupportedLLMRequest("Packed request wire shape changed")
+        log.debug(
+            "[DeepSeek.packed] guard=ok fragments_total=%s model=%s cap=%s",
+            guard.input_tokens,
+            guard.model,
+            guard.output_cap,
+        )
 
     # -- response handling ----------------------------------------------
 

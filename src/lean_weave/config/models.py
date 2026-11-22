@@ -100,6 +100,48 @@ class RetrievalConfig(ConfigModel):
     weights: RetrievalWeights = Field(default_factory=RetrievalWeights)
 
 
+class PackingConfig(ConfigModel):
+    """Opt-in token-aware context packing limits.
+
+    Section caps are independent hard limits: they never borrow from one
+    another and they need not add up to ``total_tokens``. ``output_tokens`` is
+    always reserved and can never be spent on source.
+    """
+
+    cli_default: bool = False
+    total_tokens: int = Field(default=8192, ge=1, le=1_000_000)
+    system_tokens: int = Field(default=1024, ge=0, le=1_000_000)
+    task_tokens: int = Field(default=1024, ge=0, le=1_000_000)
+    map_tokens: int = Field(default=512, ge=0, le=1_000_000)
+    source_tokens: int = Field(default=4096, ge=0, le=1_000_000)
+    tool_tokens: int = Field(default=2048, ge=0, le=1_000_000)
+    output_tokens: int = Field(default=1024, ge=1, le=1_000_000)
+    max_expansions: int = Field(default=2, ge=0, le=16)
+    cumulative_source_tokens: int = Field(default=8192, ge=1, le=1_000_000)
+
+    @model_validator(mode="after")
+    def validate_independent_limits(self) -> "PackingConfig":
+        if self.output_tokens >= self.total_tokens:
+            raise ValueError("context.packing.output_tokens must be less than total_tokens")
+        available = self.total_tokens - self.output_tokens
+        for name in (
+            "system_tokens",
+            "task_tokens",
+            "map_tokens",
+            "source_tokens",
+            "tool_tokens",
+        ):
+            if getattr(self, name) > available:
+                raise ValueError(
+                    f"context.packing.{name} must not exceed total_tokens - output_tokens"
+                )
+        if self.cumulative_source_tokens < self.source_tokens:
+            raise ValueError(
+                "context.packing.cumulative_source_tokens must be at least source_tokens"
+            )
+        return self
+
+
 class ContextConfig(ConfigModel):
     """Strict deterministic-retrieval limits; every cap is a hard maximum."""
 
@@ -117,6 +159,7 @@ class ContextConfig(ConfigModel):
     map_rows_max: int = Field(default=80, ge=1, le=500)
     exclusions: list[str] = Field(default_factory=list)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    packing: PackingConfig = Field(default_factory=PackingConfig)
 
     @field_validator("exclusions")
     @classmethod

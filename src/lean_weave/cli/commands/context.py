@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Literal
 
 import typer
+from click.core import ParameterSource
 from pydantic import ValidationError
 
-from lean_weave.app import create_indexed_map_preview_pair, create_retrieval_provider
+from lean_weave.app import (
+    create_context_packer,
+    create_indexed_map_preview_pair,
+    create_retrieval_provider,
+)
 from lean_weave.cli.runtime import command_context
 from lean_weave.context.builder import ContextBuilder
 from lean_weave.context.models import (
@@ -17,6 +23,11 @@ from lean_weave.context.models import (
     ExpansionLevel,
     SourceRange,
     normalize_relative_path,
+)
+from lean_weave.context.packing_models import (
+    PackEnvelope,
+    PackRequest,
+    PackResult,
 )
 from lean_weave.context.policy import contains_secret, is_python
 from lean_weave.context.python_index import build_python_index
@@ -75,6 +86,245 @@ def _emit(payload: dict, *, json_output: bool, human: str) -> None:
         typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     else:
         typer.echo(_escape(human).rstrip("\n"))
+
+
+_PREVIEW_SYSTEM = (
+    "You are a read-only coding assistant. Use only the supplied source and "
+    "repository map. Do not assume omitted code, and do not modify files."
+)
+
+
+def _explicit(ctx: typer.Context, name: str) -> bool:
+    source = ctx.get_parameter_source(name)
+    return source is ParameterSource.COMMANDLINE
+
+
+def _resolve_packed_mode(
+    ctx: typer.Context,
+    *,
+    packed: bool,
+    legacy: bool,
+    pack_level: str,
+    legacy_options: tuple[str, ...],
+) -> bool:
+    packed_signal = packed or _explicit(ctx, "pack_level")
+    legacy_signal = legacy or any(_explicit(ctx, name) for name in legacy_options)
+    if packed_signal and legacy_signal:
+        raise typer.BadParameter("Packed and legacy context options cannot be combined")
+    if packed_signal:
+        return True
+    if legacy_signal:
+        return False
+    return command_context(ctx).config.context.packing.cli_default
+
+
+def _pack_level(value: str) -> str:
+    if value not in {"l0", "l1"}:
+        raise typer.BadParameter("--pack-level must be l0 or l1")
+    return value
+
+
+def _task_id(query: str) -> str:
+    return "cli:" + hashlib.sha256(query.encode("utf-8")).hexdigest()[:24]
+
+
+def _run_packed(
+    ctx: typer.Context,
+    *,
+    query: str,
+    level: str,
+) -> PackResult:
+    context = command_context(ctx)
+    _guard(query, what="Task query")
+    try:
+        request = PackRequest(
+            task_id=_task_id(query),
+            query=query,
+            task_specification=query,
+            system_instructions=_PREVIEW_SYSTEM,
+            level=_pack_level(level),  # type: ignore[arg-type]
+            envelope=PackEnvelope(
+                model=context.config.llm.model,
+                thinking="enabled" if context.config.llm.thinking else "disabled",
+            ),
+        )
+    except (ValidationError, ForbiddenContext) as exc:
+        raise typer.BadParameter("Invalid packed context request") from exc
+    packer = create_context_packer(context)
+    return packer.build(request)
+
+
+def _composition_payload(result: PackResult) -> dict:
+    pack = result.pack
+    if pack is None:
+        return {
+            "status": result.status,
+            "reason_codes": list(result.reason_codes),
+            "omissions": [],
+        }
+    return {
+        "version": pack.version,
+        "level": pack.level,
+        "status": pack.status,
+        "reason_codes": list(pack.reason_codes),
+        "omissions": [item.model_dump(mode="json") for item in pack.omissions],
+        "composition": pack.metrics.model_dump(mode="json"),
+        "scan_incomplete": pack.scan_incomplete,
+        "degraded_reasons": list(pack.degraded_reasons),
+    }
+
+
+def _packed_payload(
+    result: PackResult, *, command: Literal["build", "inspect", "budget"]
+) -> dict:
+    if command == "budget":
+        pack = result.pack
+        payload = {
+            "schema_version": 2,
+            "command": command,
+            "status": result.status,
+            "reason_codes": list(result.reason_codes),
+        }
+        if pack is not None:
+            payload["composition"] = pack.metrics.model_dump(mode="json")
+        return payload
+    payload = {
+        "schema_version": 2,
+        "command": command,
+        **_composition_payload(result),
+    }
+    pack = result.pack
+    if pack is None:
+        return payload
+    if command == "build":
+        payload["model"] = pack.model
+        payload["map_rows"] = [item.model_dump(mode="json") for item in pack.map_rows]
+        payload["fragments"] = [
+            item.model_dump(mode="json") for item in pack.fragments
+        ]
+        payload["included_fragment_ids"] = list(pack.included_fragment_ids)
+        payload["prior_fragment_ids"] = list(pack.prior_fragment_ids)
+        payload["source_revisions"] = [
+            item.model_dump(mode="json") for item in pack.source_revisions
+        ]
+        return payload
+    payload["model"] = pack.model
+    payload["map_rows"] = [
+        {
+            "row_id": item.row_id,
+            "path": item.path,
+            "module": item.module,
+            "digest": item.digest,
+            "origin": item.origin,
+        }
+        for item in pack.map_rows
+    ]
+    payload["fragments"] = [
+        item.model_dump(mode="json", exclude={"text"}) for item in pack.fragments
+    ]
+    payload["included_fragment_ids"] = list(pack.included_fragment_ids)
+    payload["prior_fragment_ids"] = list(pack.prior_fragment_ids)
+    payload["source_revisions"] = [
+        item.model_dump(mode="json") for item in pack.source_revisions
+    ]
+    payload["candidate_refs"] = [
+        item.model_dump(mode="json") for item in pack.candidate_refs
+    ]
+    payload["relation_evidence"] = [
+        item.model_dump(mode="json") for item in pack.relation_evidence
+    ]
+    return payload
+
+
+def _packed_human(
+    result: PackResult, *, command: Literal["build", "inspect", "budget"]
+) -> str:
+    pack = result.pack
+    if pack is None:
+        return "\n".join(
+            [
+                f"status={result.status}",
+                "reasons=" + ",".join(result.reason_codes),
+            ]
+        )
+    metrics = pack.metrics
+    header = (
+        f"status={pack.status} level={pack.level} "
+        f"input={metrics.input_tokens} output={metrics.output_tokens} "
+        f"total={metrics.total_tokens}/{metrics.total_tokens + metrics.remaining_total} "
+        f"remaining={metrics.remaining_total} fragments={len(pack.fragments)} "
+        f"map={len(pack.map_rows)}"
+    )
+    if command == "budget":
+        limits = " ".join(
+            f"{name}={value}" for name, value in sorted(metrics.section_limits.items())
+        )
+        return "\n".join(
+            [
+                header,
+                "sections="
+                + " ".join(
+                    f"{name}={value}"
+                    for name, value in sorted(metrics.section_tokens.items())
+                ),
+                f"limits: {limits}",
+                f"cumulative={metrics.cumulative_source_units} estimator={metrics.estimator}",
+                "reasons=" + ",".join(pack.reason_codes),
+            ]
+        )
+    lines = [header]
+    if pack.omissions:
+        lines.append(
+            "omissions="
+            + ",".join(item.reason for item in pack.omissions)
+        )
+    for row in pack.map_rows:
+        if command == "build":
+            lines.append(row.row)
+        else:
+            lines.append(f"map {row.row_id} {row.path} {row.digest or ''}".rstrip())
+    for fragment in pack.fragments:
+        if command == "build":
+            lines.append(
+                f"--- {fragment.path}:{fragment.start_line}-{fragment.end_line} "
+                f"{fragment.digest} {fragment.kind} ---"
+            )
+            lines.append(fragment.text)
+        else:
+            reasons = ",".join(fragment.reasons)
+            lines.append(
+                f"{fragment.path}:{fragment.start_line}-{fragment.end_line} "
+                f"{fragment.digest} {fragment.kind} id={fragment.fragment_id} "
+                f"{fragment.symbol or ''} {reasons}".rstrip()
+            )
+    return "\n".join(lines)
+
+
+def _emit_packed(
+    result: PackResult,
+    *,
+    command: Literal["build", "inspect", "budget"],
+    json_output: bool,
+) -> None:
+    _emit(
+        _packed_payload(result, command=command),
+        json_output=json_output,
+        human=_packed_human(result, command=command),
+    )
+    log.info(
+        "[CLI.context.%s] mode=packed status=%s fragments=%s input=%s",
+        command,
+        result.status,
+        len(result.pack.fragments) if result.pack else 0,
+        result.pack.metrics.input_tokens if result.pack else 0,
+    )
+    if result.status == "stale_reference":
+        raise typer.Exit(1)
+    if (
+        result.status == "insufficient_context"
+        and "source_unavailable" in result.reason_codes
+    ):
+        raise typer.Exit(1)
 
 
 def _hit_payload(hit: SearchHit) -> dict:
@@ -369,16 +619,31 @@ def _parse_lines(value: str) -> tuple[int, int]:
 @context_app.command("build")
 def build_command(
     ctx: typer.Context,
-    task: str = typer.Argument(..., help="Task description."),
+    task: str = typer.Argument(..., help="Task description or packed retrieval query."),
     path: list[str] = typer.Option([], "--path", help="Explicit eligible path (repeatable)."),
     level: ExpansionLevel = typer.Option(ExpansionLevel.SYMBOLS, "--level"),
     reason: str | None = typer.Option(None, "--reason", help="Justification for full files."),
     indexed_map: bool = typer.Option(
         False, "--indexed-map", help="Opt-in compact map from the persistent code index."
     ),
+    packed: bool = typer.Option(False, "--packed", help="Use V2 token-aware packing."),
+    legacy: bool = typer.Option(False, "--legacy", help="Use the V1 builder explicitly."),
+    pack_level: str = typer.Option("l1", "--pack-level", help="Packed level: l0 or l1."),
     json_output: bool = typer.Option(False, "--json", help="Stable JSON output."),
 ) -> None:
     """Build a deterministic context pack under configured budgets."""
+
+    packed_mode = _resolve_packed_mode(
+        ctx,
+        packed=packed,
+        legacy=legacy,
+        pack_level=pack_level,
+        legacy_options=("level", "path", "reason", "indexed_map"),
+    )
+    if packed_mode:
+        result = _run_packed(ctx, query=task, level=pack_level)
+        _emit_packed(result, command="build", json_output=json_output)
+        return
 
     context = command_context(ctx)
     paths = [_path(item) for item in path]
@@ -445,12 +710,27 @@ def build_command(
 @context_app.command("inspect")
 def inspect_command(
     ctx: typer.Context,
-    path: str = typer.Argument(..., help="Eligible project-relative path."),
+    path: str = typer.Argument(..., help="Eligible path, or packed retrieval query."),
     symbol: str | None = typer.Option(None, "--symbol", help="Exact symbol name."),
     lines: str | None = typer.Option(None, "--lines", help="START:END line interval."),
+    packed: bool = typer.Option(False, "--packed", help="Use V2 token-aware packing."),
+    legacy: bool = typer.Option(False, "--legacy", help="Use V1 path inspection explicitly."),
+    pack_level: str = typer.Option("l1", "--pack-level", help="Packed level: l0 or l1."),
     json_output: bool = typer.Option(False, "--json", help="Stable JSON output."),
 ) -> None:
     """Inspect safe metadata or one provenance-bearing selected range."""
+
+    packed_mode = _resolve_packed_mode(
+        ctx,
+        packed=packed,
+        legacy=legacy,
+        pack_level=pack_level,
+        legacy_options=("symbol", "lines"),
+    )
+    if packed_mode:
+        result = _run_packed(ctx, query=path, level=pack_level)
+        _emit_packed(result, command="inspect", json_output=json_output)
+        return
 
     context = command_context(ctx)
     repository = _repository(context)
@@ -540,3 +820,16 @@ def inspect_command(
     )
     _emit(payload, json_output=json_output, human=human)
     log.info("[CLI.context.inspect] mode=metadata symbols=%s", len(symbols))
+
+
+@context_app.command("budget")
+def budget_command(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Packed retrieval query."),
+    pack_level: str = typer.Option("l1", "--pack-level", help="Packed level: l0 or l1."),
+    json_output: bool = typer.Option(False, "--json", help="Stable JSON output."),
+) -> None:
+    """Show numeric packed-context limits and composition only."""
+
+    result = _run_packed(ctx, query=query, level=pack_level)
+    _emit_packed(result, command="budget", json_output=json_output)

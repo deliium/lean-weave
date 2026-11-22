@@ -1,10 +1,15 @@
-[← Architecture](architecture.md) · [CLI](cli.md) · [Benchmarks](benchmarks.md) · [Back to README](../README.md)
+[← Architecture](architecture.md) · [CLI](cli.md) · [Context packing](context-packing.md) · [Benchmarks](benchmarks.md) · [Back to README](../README.md)
 
 # Task-Aware Context Retrieval
 
 Offline hybrid ranking over a strict admitted source snapshot. No embeddings,
 vector databases, or LLM reranking. Stage `ContextProvider.build` behavior is
 unchanged; retrieval is an explicit preview API and CLI surface.
+
+Token-aware packing composes these ranked candidates into budgeted prompts; it
+is a separate opt-in surface with its own contracts and session semantics. See
+[context-packing.md](context-packing.md). Retrieval continues to return
+references and costs only, never prompt bodies.
 
 ## Summary
 

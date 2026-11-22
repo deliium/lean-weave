@@ -47,6 +47,8 @@ class LLMRequest(TypedDict, total=False):
     max_output_tokens: int | None
     result_model: type[BaseModel] | None
     options: LLMGatewayOptions
+    #: Optional local integrity guard for an explicitly packed request.
+    packed_guard: Any
 
 
 class LLMResponse(TypedDict, total=False):

@@ -53,6 +53,15 @@ log = get_logger("context.retriever")
 
 GraphLoader = Callable[[SourceScan], "DependencyGraph"]
 DiffReader = Callable[[Path, Iterable[str]], frozenset[str] | None]
+RankingCallback = Callable[
+    [
+        "RetrievalResult",
+        SourceScan,
+        "DependencyGraph | None",
+        tuple["RankCandidate", ...],
+    ],
+    object,
+]
 
 
 def _map_index_error(exc: CodeIndexError) -> DegradedReason:
@@ -108,6 +117,33 @@ class ContextRetriever:
         self.read_diff = read_diff
 
     def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        return self._execute(request)[0]
+
+    def rank_checked(
+        self,
+        request: RetrievalRequest,
+        *,
+        allowed_paths: frozenset[str] | None = None,
+        on_ranked: RankingCallback | None = None,
+    ) -> tuple[RetrievalResult, object | None]:
+        """Internal packing hook: rank within an optional output scope.
+
+        The callback receives detached inputs *before* the final witness check.
+        Its return value is discarded when the witness changed, so callers must
+        not retain a scanner or publish partial data.
+        """
+
+        return self._execute(
+            request, allowed_paths=allowed_paths, on_ranked=on_ranked
+        )
+
+    def _execute(
+        self,
+        request: RetrievalRequest,
+        *,
+        allowed_paths: frozenset[str] | None = None,
+        on_ranked: RankingCallback | None = None,
+    ) -> tuple[RetrievalResult, object | None]:
         if not isinstance(request, RetrievalRequest):
             raise InvalidContextRequest("Retrieval query was rejected")
         config = self.repository.config.retrieval
@@ -121,52 +157,88 @@ class ContextRetriever:
             scan_cm = self.repository.scan_retrieval_sources()
         except ContextScanError:
             log.warning("[Context.retriever] source unavailable")
-            return RetrievalResult(
-                hits=(),
-                task_kind=request.task_kind,
-                kind=request.kind,
-                top_k=top_k,
-                degraded_reasons=("source_unavailable",),
-                truncated=False,
-            )
+            return self._unavailable(request, top_k=top_k), None
 
-        with scan_cm as scan:
-            if not scan.complete:
-                degraded.append("source_scan_incomplete")
-                truncated = True
-                hits = self._rank_local(
+        try:
+            with scan_cm as scan:
+                if not scan.complete:
+                    degraded.append("source_scan_incomplete")
+                    truncated = True
+                    hits, more_trunc, selected = self._rank_local(
+                        scan,
+                        request=request,
+                        prepared=prepared,
+                        weights=weights,
+                        top_k=top_k,
+                        graph=None,
+                        git_paths=None,
+                        degraded=degraded,
+                        allowed_paths=allowed_paths,
+                    )
+                    truncated = truncated or more_trunc
+                    result = RetrievalResult(
+                        hits=tuple(hits),
+                        task_kind=request.task_kind,
+                        kind=request.kind,
+                        top_k=top_k,
+                        degraded_reasons=_ordered_degraded(degraded),
+                        truncated=truncated,
+                    )
+                    outcome = (
+                        on_ranked(result, scan, None, tuple(selected))
+                        if on_ranked is not None
+                        else None
+                    )
+                    if not scan.revalidate():
+                        log.warning(
+                            "[Context.retriever] source changed after incomplete scan"
+                        )
+                        return (
+                            self._changed(request, top_k=top_k, degraded=degraded),
+                            None,
+                        )
+                    log.debug(
+                        "[Context.retriever] task=%s sources=%s returned=%s truncated=%s degraded=%s",
+                        request.task_kind,
+                        len(scan.snapshots),
+                        len(result.hits),
+                        truncated,
+                        degraded,
+                    )
+                    return result, outcome
+
+                graph = None
+                if self.load_graph is not None:
+                    try:
+                        graph = self.load_graph(scan)
+                    except CodeIndexError as exc:
+                        code = _map_index_error(exc)
+                        degraded.append(code)
+                        log.debug("[Context.retriever] index degraded code=%s", code)
+                    except Exception:
+                        raise
+
+                git_paths: frozenset[str] | None = None
+                if self.read_diff is not None and weights.get("git_diff", 0) > 0:
+                    admitted = [item.path for item in scan.snapshots]
+                    git_paths = self.read_diff(Path(scan.policy.root), admitted)
+                    if git_paths is None:
+                        degraded.append("git_unavailable")
+                        log.debug("[Context.retriever] git unavailable")
+
+                result_hits, more_trunc, selected = self._rank_local(
                     scan,
                     request=request,
                     prepared=prepared,
                     weights=weights,
                     top_k=top_k,
-                    graph=None,
-                    git_paths=None,
+                    graph=graph,
+                    git_paths=git_paths,
                     degraded=degraded,
+                    allowed_paths=allowed_paths,
                 )
-                if not scan.revalidate():
-                    log.warning("[Context.retriever] source changed after incomplete scan")
-                    return RetrievalResult(
-                        hits=(),
-                        task_kind=request.task_kind,
-                        kind=request.kind,
-                        top_k=top_k,
-                        degraded_reasons=_ordered_degraded(
-                            [*degraded, "source_changed"]
-                        ),
-                        truncated=True,
-                    )
-                result_hits, more_trunc = hits
                 truncated = truncated or more_trunc
-                log.debug(
-                    "[Context.retriever] task=%s sources=%s returned=%s truncated=%s degraded=%s",
-                    request.task_kind,
-                    len(scan.snapshots),
-                    len(result_hits),
-                    truncated,
-                    degraded,
-                )
-                return RetrievalResult(
+                result = RetrievalResult(
                     hits=tuple(result_hits),
                     task_kind=request.task_kind,
                     kind=request.kind,
@@ -174,63 +246,56 @@ class ContextRetriever:
                     degraded_reasons=_ordered_degraded(degraded),
                     truncated=truncated,
                 )
-
-            graph = None
-            if self.load_graph is not None:
-                try:
-                    graph = self.load_graph(scan)
-                except CodeIndexError as exc:
-                    code = _map_index_error(exc)
-                    degraded.append(code)
-                    log.debug("[Context.retriever] index degraded code=%s", code)
-                except Exception:
-                    raise
-
-            git_paths: frozenset[str] | None = None
-            if self.read_diff is not None and weights.get("git_diff", 0) > 0:
-                admitted = [item.path for item in scan.snapshots]
-                git_paths = self.read_diff(Path(scan.policy.root), admitted)
-                if git_paths is None:
-                    degraded.append("git_unavailable")
-                    log.debug("[Context.retriever] git unavailable")
-
-            result_hits, more_trunc = self._rank_local(
-                scan,
-                request=request,
-                prepared=prepared,
-                weights=weights,
-                top_k=top_k,
-                graph=graph,
-                git_paths=git_paths,
-                degraded=degraded,
-            )
-            truncated = truncated or more_trunc
-            if not scan.revalidate():
-                log.warning("[Context.retriever] source changed before return")
-                return RetrievalResult(
-                    hits=(),
-                    task_kind=request.task_kind,
-                    kind=request.kind,
-                    top_k=top_k,
-                    degraded_reasons=_ordered_degraded([*degraded, "source_changed"]),
-                    truncated=True,
+                outcome = (
+                    on_ranked(result, scan, graph, tuple(selected))
+                    if on_ranked is not None
+                    else None
                 )
-            log.debug(
-                "[Context.retriever] task=%s sources=%s returned=%s truncated=%s degraded=%s",
-                request.task_kind,
-                len(scan.snapshots),
-                len(result_hits),
-                truncated,
-                degraded,
-            )
-            return RetrievalResult(
-                hits=tuple(result_hits),
-                task_kind=request.task_kind,
-                kind=request.kind,
-                top_k=top_k,
-                degraded_reasons=_ordered_degraded(degraded),
-                truncated=truncated,
-            )
+                if not scan.revalidate():
+                    log.warning("[Context.retriever] source changed before return")
+                    return (
+                        self._changed(request, top_k=top_k, degraded=degraded),
+                        None,
+                    )
+                log.debug(
+                    "[Context.retriever] task=%s sources=%s returned=%s truncated=%s degraded=%s",
+                    request.task_kind,
+                    len(scan.snapshots),
+                    len(result.hits),
+                    truncated,
+                    degraded,
+                )
+                return result, outcome
+        except ContextScanError:
+            log.warning("[Context.retriever] source unavailable at scan entry")
+            return self._unavailable(request, top_k=top_k), None
+
+    @staticmethod
+    def _unavailable(request: RetrievalRequest, *, top_k: int) -> RetrievalResult:
+        return RetrievalResult(
+            hits=(),
+            task_kind=request.task_kind,
+            kind=request.kind,
+            top_k=top_k,
+            degraded_reasons=("source_unavailable",),
+            truncated=False,
+        )
+
+    @staticmethod
+    def _changed(
+        request: RetrievalRequest,
+        *,
+        top_k: int,
+        degraded: Iterable[DegradedReason],
+    ) -> RetrievalResult:
+        return RetrievalResult(
+            hits=(),
+            task_kind=request.task_kind,
+            kind=request.kind,
+            top_k=top_k,
+            degraded_reasons=_ordered_degraded([*degraded, "source_changed"]),
+            truncated=True,
+        )
 
     def _rank_local(
         self,
@@ -243,12 +308,14 @@ class ContextRetriever:
         graph: "DependencyGraph | None",
         git_paths: frozenset[str] | None,
         degraded: list[DegradedReason],
-    ) -> tuple[list[RetrievalHit], bool]:
+        allowed_paths: frozenset[str] | None = None,
+    ) -> tuple[list[RetrievalHit], bool, list[RankCandidate]]:
         truncated_flag = False
         snapshots = {
             item.path: item
             for item in scan.snapshots
             if not contains_secret(item.path)
+            and (allowed_paths is None or item.path in allowed_paths)
         }
         states: dict[str, _PathState] = {}
         for path, snapshot in snapshots.items():
@@ -746,4 +813,4 @@ class ContextRetriever:
                     estimated_token_cost=cand.estimated_token_cost,
                 )
             )
-        return hits, truncated_flag
+        return hits, truncated_flag, selected

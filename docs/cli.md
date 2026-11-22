@@ -23,7 +23,10 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl context rank QUERY [--task-kind KIND] [--kind all\|file\|symbol] [--top-k N] [--json]` | Rank task-relevant files/definitions with scores and cost |
 | `wl context explain QUERY [--task-kind KIND] [--kind all\|file\|symbol] [--top-k N] [--json]` | Explain ranked hits with reasons, dependencies, and diagnostics |
 | `wl context build TASK [--path PATH ...] [--level map\|symbols\|ranges\|full] [--reason TEXT] [--json]` | Build a budgeted, provenance-bearing context pack |
+| `wl context build QUERY --packed [--pack-level l0\|l1] [--json]` | V2 token-aware packed build (see [context-packing.md](context-packing.md)) |
 | `wl context inspect PATH [--symbol NAME \| --lines START:END] [--json]` | Safe file metadata or one admitted range |
+| `wl context inspect QUERY --packed [--pack-level l0\|l1] [--json]` | Packed provenance view without source bodies |
+| `wl context budget QUERY [--pack-level l0\|l1] [--json]` | Numeric packed limits and composition only |
 | `wl llm check` | Opt-in DeepSeek smoke test: one small fixed request plus safe usage output |
 | `wl feature DESCRIPTION (--auto \| --review) [--worktree PATH]` | Start a feature inside an isolated linked worktree; `--worktree` adopts an existing clean checkout |
 | `wl status FEATURE` | Read-only workflow status, branch, changes, verification, usage, and next action |
@@ -181,7 +184,17 @@ uv run wl context build "review the seam" --path src/lean_weave/app.py \
 uv run wl context inspect src/lean_weave/app.py --json
 uv run wl context inspect src/lean_weave/app.py --symbol create_llm_provider
 uv run wl context inspect src/lean_weave/app.py --lines 75:95
+
+# Opt-in V2 token-aware packing (see context-packing.md)
+uv run wl context build "wire the provider seam" --packed --json
+uv run wl context inspect "wire the provider seam" --packed --json
+uv run wl context budget "wire the provider seam" --json
 ```
+
+Legacy invocation is the default. `--packed` / `--pack-level` opt into V2;
+`--legacy` always restores the V1 view. Conflicting explicit signals exit `2`.
+Setting `context.packing.cli_default: true` makes bare `build QUERY` and
+`inspect QUERY` packed without changing the other commands.
 
 ### Expansion and provenance
 

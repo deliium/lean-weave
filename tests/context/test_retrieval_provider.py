@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lean_weave.app import AppContext, create_context_provider, create_retrieval_provider
+from lean_weave.app import (
+    AppContext,
+    create_context_packer,
+    create_context_provider,
+    create_retrieval_provider,
+)
+from lean_weave.context.packer import ContextPacker
+from lean_weave.context.repository import Repository
 from lean_weave.config.models import AppConfig, ContextConfig
 from lean_weave.context.provider import DeterministicContextProvider
 from lean_weave.context.retrieval_models import RetrievalRequest, RetrievalResult
@@ -61,3 +68,15 @@ def test_create_retrieval_provider_is_concrete(project: Path):
     assert isinstance(provider, DeterministicContextProvider)
     result = provider.retrieve(RetrievalRequest(query="alpha"))
     assert isinstance(result, RetrievalResult)
+
+
+def test_packer_construction_is_lazy_and_does_not_scan(monkeypatch, project: Path):
+    write_files(project, {"a.py": "def alpha():\n    return 1\n"})
+
+    def tripwire(*args, **kwargs):
+        raise AssertionError("construction must not scan")
+
+    monkeypatch.setattr(Repository, "scan_retrieval_sources", tripwire)
+    context = AppContext(config=AppConfig(), config_source=None)
+    packer = create_context_packer(context, workspace_root=project)
+    assert isinstance(packer, ContextPacker)

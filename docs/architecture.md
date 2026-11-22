@@ -18,6 +18,7 @@ Authoritative agent docs: [ARCHITECTURE.md](../.ai-factory/ARCHITECTURE.md). Thi
 - **Disposable code index** — an optional SQLite cache of admitted Python facts outside the checkout; read-only reuse only, never a prompt authority, never written by the workflow
 - **Repository map** — in-memory static dependency graph and budgeted views over a checked index generation; explicit `wl map` / `--indexed-map` only
 - **Task-aware retrieval** — opt-in hybrid ranking over a strict text scan plus optional checked graph/Git signals; explicit `wl context rank|explain|search --task-aware` and `DeterministicContextProvider.retrieve` only (see [context-retrieval.md](context-retrieval.md))
+- **Token-aware packing** — opt-in L0/L1 composition and bounded L2 expansion under independent section/request budgets; exact source provenance, local estimators kept separate from provider usage, and an explicit guarded DeepSeek adapter (see [context-packing.md](context-packing.md))
 - **Standalone code tools** — exact reads, one-file patches, approved checks, and read-only Git metadata through an explicit caller approval snapshot
 - **Worktree session** — public CLI provisions or adopts a linked worktree, freezes approvals, and drives the existing orchestrator without a second engine
 
@@ -90,6 +91,38 @@ Design constraints:
   files and ignores arbitrary diagnostics.
 - The feature workflow builds stage-scoped packs through `ContextProvider`.
   `wl context` remains a separate offline preview surface.
+
+## Token-aware context packing (V2)
+
+`src/lean_weave/context/packer.py` is a read-only, opt-in composition surface on
+top of the same admitted snapshot used for ranking:
+
+```text
+PackRequest
+  → ContextRetriever (strict scan + optional checked graph)
+  → PackingCatalog (operation-local snapshots, AST structural spans)
+  → ContextPacker (required/optional selection, dedup, independent caps)
+  → PackedContextV2 (fragments, map rows, revisions, messages, metrics)
+  → PackingSession (task-local revisions/coverage/receipts; no bodies)
+  → prepare_packed_request (explicit guarded LLMRequest)
+```
+
+Design constraints:
+
+- `PackedContextV2` is a versioned additive contract. `ContextPack`,
+  `ContextQuery`, `ContextProvider.build`, and stage prompts are unchanged.
+- L0/L1 are initial levels; L2 is an explicit in-process caller action. The
+  packer opens a fresh strict scan for every expansion and rejects stale
+  references instead of refreshing them.
+- Every emitted fragment is a complete contiguous canonical slice. Required
+  evidence is never clipped or silently replaced by cheaper evidence.
+- Local section/request counts are separate from the gateway's reservation and
+  API-reported settlement. The default estimator is conservative bytes; an
+  exact adapter must be explicitly injected and must support the effective wire.
+- The DeepSeek adapter attaches a local guard for the counted wire shape. The
+  gateway validates it before client creation, booking, or transport.
+- No index maintenance, checkout writes, model calls, embeddings, summaries, or
+  workflow orchestrator changes are involved.
 
 ## Standalone code tools
 

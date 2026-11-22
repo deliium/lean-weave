@@ -11,6 +11,7 @@ from openai import OpenAI
 from lean_weave.code_index import CodeIndex
 from lean_weave.config import AppConfig, load_config
 from lean_weave.context.git_metadata import read_retrieval_diff
+from lean_weave.context.packer import ContextPacker
 from lean_weave.context.provider import DeterministicContextProvider
 from lean_weave.context.repository import Repository
 from lean_weave.context.retriever import ContextRetriever
@@ -269,6 +270,49 @@ def create_retrieval_provider(
     log.debug("[AppContext.retrieval] selection=deterministic_preview")
     return _deterministic_context_provider(
         context, root=root, retriever_factory=factory
+    )
+
+
+def create_context_packer(
+    context: AppContext,
+    *,
+    workspace_root: Path | None = None,
+    cache_base: Path | None = None,
+) -> ContextPacker:
+    """Construct the lazy V2 packer; no scan, cache, ledger or network I/O."""
+
+    root = Path.cwd() if workspace_root is None else Path(workspace_root)
+    try:
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        resolved_root = root
+    protected = _protected_index_paths(context, resolved_root)
+    repository_map = create_repository_map(
+        context, workspace_root=root, cache_base=cache_base
+    )
+    repository = Repository(
+        root,
+        context.config.context,
+        state_dir=context.config.workflow.state_dir,
+        strict_source=True,
+        protected_paths=protected,
+    )
+
+    def load_graph(scan):
+        return repository_map.graph_for_retrieval_scan(scan)
+
+    retriever = ContextRetriever(repository, load_graph=load_graph)
+    log.debug(
+        "[AppContext.packing] selection=lazy model=%s total_tokens=%s cli_default=%s",
+        context.config.llm.model,
+        context.config.context.packing.total_tokens,
+        context.config.context.packing.cli_default,
+    )
+    return ContextPacker(
+        repository,
+        retriever=retriever,
+        model=context.config.llm.model,
+        thinking=context.config.llm.thinking,
     )
 
 

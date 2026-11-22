@@ -51,6 +51,17 @@ adds complete AST spans; `--level full` requires exactly one path and a
 digest. Budgets and exclusions are configured under `context` in
 `.lean-weave/config.yaml`.
 
+Token-aware V2 packing is opt-in:
+
+```bash
+uv run wl context build "wire the provider seam" --packed --json
+uv run wl context inspect "wire the provider seam" --packed --json
+uv run wl context budget "wire the provider seam" --json
+```
+
+See [context-packing.md](context-packing.md) for budgets, L0/L1/L2 semantics,
+expansion sessions, and the explicit DeepSeek adapter.
+
 ## Persistent code index (optional, offline)
 
 The index is a disposable local cache of Python facts. It is never required:

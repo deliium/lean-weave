@@ -136,6 +136,15 @@ path signals injected at `app.py::create_retrieval_provider`. Stage
 `ContextProvider.build` is unchanged; only explicit `retrieve()` / CLI preview
 paths consume ranked hits.
 
+`context/packer.py`, `packing_source.py`, `packing_tokens.py`,
+`packing_session.py`, and `packing_gateway.py` add the opt-in V2 composition
+surface. `PackedContextV2` is additive: whole units are materialized from one
+strict scan, deduplicated, budgeted by independent section caps, and tracked in a
+process-local expansion session that stores revisions/coverage/receipts rather
+than source bodies. The DeepSeek adapter attaches a local wire guard validated
+before gateway booking or transport. `app.py::create_context_packer` is lazy; no
+index maintenance, stage prompt change, or orchestrator dependency is added.
+
 ## ADRs
 
 | ADR | Topic |

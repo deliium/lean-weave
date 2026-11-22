@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from lean_weave.app import AppContext, build_app_context, create_context_provider
+import lean_weave.context.packer as packer_module
 import lean_weave.context.provider as provider_module
 from lean_weave.code_index import CodeIndex
 from lean_weave.config import AppConfig
@@ -314,3 +315,14 @@ def test_cache_is_never_opened_for_plan_or_verify(provider_project: Path):
     provider = DeterministicContextProvider(provider_project, fact_loader_factory=factory)
     provider.build("plan", FeatureState(feature_id="f", stage=Stage.PLAN, request="Plan"))
     provider.build("verify", _state(Stage.VERIFY))
+
+
+def test_stage_build_never_invokes_packing(monkeypatch, provider_project: Path):
+    def tripwire(*args, **kwargs):
+        raise AssertionError("stage ContextProvider.build must not invoke packing")
+
+    monkeypatch.setattr(packer_module.ContextPacker, "build", tripwire)
+    provider = DeterministicContextProvider(provider_project)
+    pack = provider.build("implement", _state(Stage.IMPLEMENT))
+    assert pack["messages"]
+    assert "pkg/a.py" in pack["file_excerpts"]
