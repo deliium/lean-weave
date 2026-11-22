@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "budget_exhaustion",
+  "tree": "budget_exhaustion",
+  "expected_head": "414c44b3dae778f5c03e1426b9928828e850bbaf",
+  "request": "Change mark() so it returns stamped.",
+  "write_paths": [
+    "src/small.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_mark"
+  ],
+  "checks": [
+    {
+      "id": "assert_mark",
+      "oracle": "assert_mark.py",
+      "target": "src/small.py",
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{target}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "stamp mark",
+      "description": "Return stamped",
+      "files": [
+        "src/small.py"
+      ],
+      "depends_on": []
+    }
+  ],
+  "workflow_limits": {
+    "max_task_tokens": 1,
+    "feature_token_budget": 1
+  },
+  "expected_behavior": {
+    "outcome": "budget_exhausted",
+    "status": "budget_exhausted"
+  },
+  "pass_criteria": {
+    "unchanged_on_budget_stop": [
+      "src/small.py"
+    ]
+  }
+}

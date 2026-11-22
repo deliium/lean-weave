@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "id": "bug_fix",
+  "tree": "bug_fix",
+  "expected_head": "1802647eabbd5baca3809260f59ecb572b8d5128",
+  "request": "Fix add() so it returns the sum of its arguments.",
+  "write_paths": [
+    "src/calc.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_add"
+  ],
+  "checks": [
+    {
+      "id": "assert_add",
+      "oracle": "assert_add.py",
+      "target": "src/calc.py",
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{target}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "fix add",
+      "description": "Change subtraction to addition",
+      "files": [
+        "src/calc.py"
+      ],
+      "depends_on": []
+    }
+  ],
+  "workflow_limits": {},
+  "expected_behavior": {
+    "outcome": "success",
+    "status": "success"
+  },
+  "pass_criteria": {
+    "files": {
+      "src/calc.py": {
+        "must_contain": [
+          "return a + b"
+        ],
+        "must_not_contain": [
+          "return a - b"
+        ]
+      }
+    }
+  }
+}

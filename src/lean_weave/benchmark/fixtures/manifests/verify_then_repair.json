@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "id": "verify_then_repair",
+  "tree": "verify_then_repair",
+  "expected_head": "e0575201de6297e07ff09292e9d268882c49d883",
+  "request": "Set VALUE to 2 in src/marker.py. If verification fails with a recognized diagnostic, repair that file only.",
+  "write_paths": [
+    "src/marker.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_marker"
+  ],
+  "checks": [
+    {
+      "id": "assert_marker",
+      "oracle": "assert_marker.py",
+      "target": "src/marker.py",
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{target}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "set VALUE",
+      "description": "Assign VALUE = 2",
+      "files": [
+        "src/marker.py"
+      ],
+      "depends_on": []
+    }
+  ],
+  "workflow_limits": {
+    "max_retries": 2
+  },
+  "expected_behavior": {
+    "outcome": "success_after_repair",
+    "status": "success",
+    "min_retry_count": 1
+  },
+  "pass_criteria": {
+    "files": {
+      "src/marker.py": {
+        "must_contain": [
+          "VALUE = 2"
+        ]
+      }
+    }
+  }
+}

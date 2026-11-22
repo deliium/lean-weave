@@ -483,6 +483,8 @@ class WorktreeManager:
         feature_files = {
             f"{state_dir}/workflow/{record.feature_id}.json",
             f"{state_dir}/workflow/{record.feature_id}.lock",
+            f"{state_dir}/metrics/{_APP_STATE_FILE}",
+            f"{state_dir}/metrics/{_APP_STATE_FILE}.lock",
         }
         owned: list[Path] = []
         for entry in status.entries:
@@ -515,7 +517,10 @@ class WorktreeManager:
                     child = current_path / name
                     if child.is_symlink():
                         return None
-                    if relative_parent.as_posix() == state_dir and name == "workflow":
+                    if relative_parent.as_posix() == state_dir and name in {
+                        "workflow",
+                        "metrics",
+                    }:
                         continue
                     return None
                 for name in filenames:
@@ -528,6 +533,11 @@ class WorktreeManager:
                     if relative_parent.as_posix() == f"{state_dir}/workflow" and rel.as_posix() in {
                         f"workflow/{record.feature_id}.json",
                         f"workflow/{record.feature_id}.lock",
+                    }:
+                        continue
+                    if relative_parent.as_posix() == f"{state_dir}/metrics" and rel.as_posix() in {
+                        f"metrics/{_APP_STATE_FILE}",
+                        f"metrics/{_APP_STATE_FILE}.lock",
                     }:
                         continue
                     return None

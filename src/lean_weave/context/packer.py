@@ -13,7 +13,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from functools import cmp_to_key
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from lean_weave.context.models import iter_lines
 from lean_weave.context.policy import is_python
@@ -145,6 +145,7 @@ class ContextPacker:
         thinking: bool = False,
         cache: ContextCache | None = None,
         workflow_tool_tokens: int | None = None,
+        rank_observer: Callable[[Any], None] | None = None,
     ) -> None:
         self.repository = repository
         self.retriever = retriever or ContextRetriever(repository)
@@ -154,6 +155,7 @@ class ContextPacker:
         self.default_model = model
         self.default_thinking = thinking
         self._workflow_tool_tokens = workflow_tool_tokens
+        self._rank_observer = rank_observer
         self._cache = cache if cache is not None and cache.enabled else None
         self._fact_cache = None
         self._span_cache = None
@@ -387,16 +389,16 @@ class ContextPacker:
                 result, outcome = self.retriever.rank_checked(
                     RetrievalRequest(query=request.query),
                     allowed_paths=scope,
-                    on_ranked=lambda ranked, scan, ranked_graph, selected: self._select(
-                        request,
+                    on_ranked=lambda ranked, scan, ranked_graph, selected: self._observed_select(
                         ranked,
+                        request,
                         scan,
                         ranked_graph,
                         selected,
-                        envelope=envelope,
-                        counter_state=counter_state,
-                        batch=batch,
-                        output_tokens=effective_output,
+                        envelope,
+                        counter_state,
+                        batch,
+                        effective_output,
                     ),
                 )
             else:
@@ -406,16 +408,16 @@ class ContextPacker:
                     scan_paths=scan_paths,
                     read_filter=read_filter,
                     graph=graph,
-                    on_ranked=lambda ranked, scan, ranked_graph, selected: self._select(
-                        request,
+                    on_ranked=lambda ranked, scan, ranked_graph, selected: self._observed_select(
                         ranked,
+                        request,
                         scan,
                         ranked_graph,
                         selected,
-                        envelope=envelope,
-                        counter_state=counter_state,
-                        batch=batch,
-                        output_tokens=effective_output,
+                        envelope,
+                        counter_state,
+                        batch,
+                        effective_output,
                     ),
                 )
         except ContextScanError:
@@ -562,6 +564,35 @@ class ContextPacker:
                 )
         if pending:
             raise UnsupportedLLMRequest("Replay tool calls require matching results")
+
+    def _observed_select(
+        self,
+        ranked: Any,
+        request: PackRequest,
+        scan: Any,
+        ranked_graph: Any,
+        selected: Any,
+        envelope: Any,
+        counter_state: Any,
+        batch: Any,
+        output_tokens: int,
+    ) -> Any:
+        if self._rank_observer is not None:
+            try:
+                self._rank_observer(ranked)
+            except Exception:  # noqa: BLE001 - evaluation observer is non-authorizing
+                pass
+        return self._select(
+            request,
+            ranked,
+            scan,
+            ranked_graph,
+            selected,
+            envelope=envelope,
+            counter_state=counter_state,
+            batch=batch,
+            output_tokens=output_tokens,
+        )
 
     def _assemble(
         self,

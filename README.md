@@ -2,7 +2,7 @@
 
 > Token-efficient AI coding pipeline — plan, implement, verify, and retry with structured state and minimal LLM tokens.
 
-lean-weave is a single-process feature workflow using DeepSeek and deterministic local verification. The public CLI exposes `wl feature` with isolated Git worktrees, `--auto` / `--review` modes, resume/cancel/status, and an offline MVP benchmark corpus under `benchmarks/`.
+lean-weave is a single-process feature workflow using DeepSeek and deterministic local verification. The public CLI exposes `wl feature` with isolated Git worktrees, `--auto` / `--review` modes, resume/cancel/status, read-only `wl stats`, and installed deterministic `wl benchmark run|compare|report` suites backed by the packaged `lean_weave.benchmark` core.
 
 ## Quick Start
 
@@ -61,7 +61,7 @@ uv run wl feature --help
 | [Context packing](docs/context-packing.md) | Token budgets, L0/L1/L2, sessions, guarded DeepSeek delivery |
 | [Repository map](docs/repository-map.md) | Compact offline maps, budgets, and indexed context preview |
 | [Worktree workflow](docs/worktree-workflow.md) | Feature CLI, approvals, cancel, cleanup |
-| [Benchmarks](docs/benchmarks.md) | Fixture corpus, offline evidence, live preflight, V2 protocol |
+| [Benchmarks](docs/benchmarks.md) | Installed run/compare/report, thresholds, fixture corpus, live limits, V2 protocol |
 | [MVP 1 readiness](docs/mvp1-readiness.md) | Offline/live/safety verdicts and evidence links |
 
 ### Agent artifacts

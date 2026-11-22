@@ -11,6 +11,8 @@ from lean_weave.schemas.models import TokenUsage
 StageName = Literal["plan", "implement", "verify", "retry"]
 GatewayStage = Literal["plan", "implement", "verify", "retry", "probe"]
 ThinkingMode = Literal["enabled", "disabled"]
+#: Actual context strategy used for one workflow dispatch.
+ContextStrategy = Literal["v1", "v2", "v1_fallback"]
 
 #: Reserved attribution for the explicit, opt-in connection check. Normal
 #: workflow stages cannot use this feature ID, and the probe cannot use a
@@ -47,6 +49,8 @@ class LLMRequest(TypedDict, total=False):
     max_output_tokens: int | None
     result_model: type[BaseModel] | None
     options: LLMGatewayOptions
+    #: Optional local-only attribution carried to the usage journal.
+    usage_attribution: Any
     #: Optional local integrity guard for an explicitly packed request.
     packed_guard: Any
 

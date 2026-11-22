@@ -114,6 +114,7 @@ def run_tool_loop(
     reasoning_effort: str | None = None,
     cancel_check: Callable[[], bool] | None = None,
     round_builder: Callable[[Sequence[LLMMessage]], LLMRequest] | None = None,
+    attribution: Mapping[str, Any] | None = None,
 ) -> ToolLoopOutcome:
     if max_rounds < 1:
         raise WorkflowBudgetExceeded("tool_round_limit")
@@ -186,6 +187,8 @@ def run_tool_loop(
             if reasoning_effort is not None and thinking_enabled:
                 request["reasoning_effort"] = reasoning_effort
 
+        if attribution is not None:
+            request["usage_attribution"] = dict(attribution)
         reservation_messages = request.get("messages") or []
         reservation_tools = request.get("tools")
         reservation_format = request.get("response_format")

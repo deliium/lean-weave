@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "id": "single_file_feature",
+  "tree": "single_file_feature",
+  "expected_head": "0f580b5a130364ef8fe79585acc7d5728f4c89d5",
+  "request": "Update greet() to return a Hello greeting that includes the name.",
+  "write_paths": [
+    "src/greeter.py"
+  ],
+  "allowed_operations": [
+    "read_range",
+    "apply_patch"
+  ],
+  "check_ids": [
+    "assert_greeter"
+  ],
+  "checks": [
+    {
+      "id": "assert_greeter",
+      "oracle": "assert_greeter.py",
+      "target": "src/greeter.py",
+      "argv_template": [
+        "{python}",
+        "{oracle}",
+        "{target}"
+      ],
+      "timeout_s": 5,
+      "output_bytes_max": 65536,
+      "runs_workspace_code": false
+    }
+  ],
+  "task_plan": [
+    {
+      "id": "1",
+      "title": "add greeting",
+      "description": "Return Hello, name",
+      "files": [
+        "src/greeter.py"
+      ],
+      "depends_on": []
+    }
+  ],
+  "workflow_limits": {},
+  "expected_behavior": {
+    "outcome": "success",
+    "status": "success"
+  },
+  "pass_criteria": {
+    "files": {
+      "src/greeter.py": {
+        "must_contain": [
+          "Hello"
+        ]
+      }
+    }
+  }
+}

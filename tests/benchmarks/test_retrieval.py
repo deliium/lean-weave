@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.retrieval import (
+from lean_weave.benchmark.retrieval import (
     CASES_PATH,
     GIT_SIGNAL_DECOY,
     GIT_SIGNAL_LABELED,
@@ -62,17 +62,17 @@ def test_comparison_runs_offline(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
     git_reads: list[str] = []
     real_read = __import__(
-        "benchmarks.retrieval", fromlist=["read_retrieval_diff"]
+        "lean_weave.benchmark.retrieval", fromlist=["read_retrieval_diff"]
     ).read_retrieval_diff
 
     def tracked_read(root, admitted_paths, **kwargs):
         git_reads.append(Path(root).as_posix())
         return real_read(root, admitted_paths, **kwargs)
 
-    monkeypatch.setattr("benchmarks.retrieval.read_retrieval_diff", tracked_read)
+    monkeypatch.setattr("lean_weave.benchmark.retrieval.read_retrieval_diff", tracked_read)
 
     cases_done = {"n": 0}
-    from benchmarks import retrieval as retrieval_mod
+    from lean_weave.benchmark import retrieval as retrieval_mod
 
     real_evaluate = retrieval_mod.evaluate_case
 

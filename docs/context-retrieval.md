@@ -89,18 +89,40 @@ to live AST facts without graph authority.
 ## Evaluation
 
 ```bash
+# Installed deterministic retrieval suite
+wl benchmark run --suite retrieval --output /secure/results/retrieval.json
+
+# Legacy developer comparison (historical report shape)
 uv run --locked python -m benchmarks.retrieval --json
 ```
 
-Compares V1 lexicographic ranking to V2 cold/warm retrieval on labeled cases
-(including pinned `bug_fix` / `multi_file_feature` and synthetic
-development/holdout trees). Git is disabled for the matched comparison.
-Precision@K / Recall@K are reported separately from:
+Canonical fixtures and labels are packaged under
+`src/lean_weave/benchmark/fixtures/`; `benchmarks/fixtures/` is a compatibility
+wrapper for existing developer imports. Each case may carry `relevant_paths`,
+inclusive `relevant_ranges`, distinct `required_dependencies`, symbol labels and
+expected locations. Labels are validated against materialized source/line
+counts before evaluation; stale paths/ranges and duplicate IDs are rejected.
+Oracle programs, intended edits and labels never enter a candidate tree.
 
-- **V1 prompt excerpts** — `ContextBuilder` at `ExpansionLevel.RANGES` with a
-  fixed 2048-token budget (actual admitted prompt evidence, not V2 windows)
-- **V2 source-cost estimates** — cumulative `estimated_token_cost` at K plus
-  labeled-interval coverage under 256 and 512 token prefixes
+The installed suite reports ranked file/symbol P@K and R@K (K = 1, 3, 5, 10)
+separately from actual packed-source coverage:
+
+- **V1 source excerpts** — `ContextBuilder` at `ExpansionLevel.RANGES`
+- **V2 admitted fragments** — actual packed fragments, not guessed prefixes
+
+Source coverage unions selected intervals per path, intersects them with the
+merged judged intervals, and counts tokens once with the same pinned
+`conservative_estimate` in both arms. `missing_dependency_count` counts required
+dependency ranges not fully covered. Rows, map output and omitted text never
+satisfy source coverage. A case with no symbol labels reports symbol metrics as
+`null`/not applicable, not zero. Fixed variants are `v1_default`, `v2_default`,
+`v2_map_off`, `v2_no_graph`, `v2_tight`, `v2_cache_cold`, `v2_cache_warm` and
+`v2_cache_disabled`; cold/warm use a private cache namespace and a warm arm
+performs one unmeasured identical prime. Local cache state is not an API token
+saving.
+
+The older developer report still includes V1 prompt excerpts and its prefix-cost
+proxy; those historical fields are not part of the installed comparison contract.
 
 Representative cold/warm vs V1 file recall from a local locked run (stock
 weights; regenerate with the command above — do not treat as a CI gate):
@@ -139,9 +161,11 @@ Separately, `dev_auth` is committed, then comment-only edits land on the labeled
 
 ### Adding cases
 
-Edit `benchmarks/fixtures/retrieval/cases.json` and optional trees under
-`benchmarks/fixtures/retrieval/trees/`. Freeze `relevant_paths` / symbol labels
-before inspecting rank output.
+Edit `src/lean_weave/benchmark/fixtures/retrieval/cases.json` (and the
+corresponding `benchmarks/fixtures/retrieval/` wrapper mirror when keeping
+developer imports identical). Freeze `relevant_paths`, inclusive
+`relevant_ranges`, `required_dependencies` and symbol labels before inspecting
+rank output. Every label is validated against the packaged tree.
 
 ## See also
 

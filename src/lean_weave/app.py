@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx2
 from openai import OpenAI
@@ -531,6 +532,7 @@ def create_llm_provider(    context: AppContext,
     api_key: str | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] | None = None,
+    post_settlement_policy: Callable[[Any], None] | None = None,
 ) -> LLMProvider:
     """Construct the production provider on demand.
 
@@ -566,6 +568,7 @@ def create_llm_provider(    context: AppContext,
         api_key=api_key,
         clock=clock,
         sleeper=sleep,
+        post_settlement_policy=post_settlement_policy,
     )
 
 

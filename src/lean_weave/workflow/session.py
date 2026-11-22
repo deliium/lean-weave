@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 import pathspec
 
-from lean_weave.app import AppContext, create_orchestrator
+from lean_weave.app import AppContext, create_llm_provider, create_orchestrator
 from lean_weave.config import AppConfig, load_config
 from lean_weave.errors import (
     ConfigError,
@@ -34,6 +34,7 @@ from lean_weave.workflow.context_lifecycle import context_authority_material
 from lean_weave.workflow.orchestrator import MinimalWorkflowOrchestrator
 from lean_weave.workflow.planning import PlanPolicy
 from lean_weave.workflow.results import WorkflowResult, WorkflowStatus, project_result
+from lean_weave.workflow.stats import FeatureStats, project_feature_stats
 from lean_weave.workflow.state import (
     JsonCheckpointStore,
     normalize_feature_id,
@@ -44,6 +45,7 @@ from lean_weave.worktree.manager import WorktreeManager
 from lean_weave.worktree.registry import (
     ProvisioningPhase,
     clear_cancel_marker,
+    list_routing_ids,
     read_cancel_marker,
     read_routing,
 )
@@ -99,6 +101,9 @@ class FeatureSession:
         config_path: Path,
         adopt_worktree: Path | None = None,
         check_ids: Sequence[str] | None = None,
+        transport: Any | None = None,
+        api_key: str | None = None,
+        post_settlement_policy: Any | None = None,
     ) -> FeatureView:
         if not description.strip():
             raise ConfigError("feature_description_required")
@@ -143,6 +148,17 @@ class FeatureSession:
                 state_store=store,
                 metrics_collector=journal,
             )
+            if (
+                self._llm_provider is None
+                and (transport is not None or post_settlement_policy is not None)
+            ):
+                context.llm_provider = create_llm_provider(
+                    context,
+                    journal=journal,
+                    transport=transport,
+                    api_key=api_key or ("sk-offline-test" if transport is not None else None),
+                    post_settlement_policy=post_settlement_policy,
+                )
             common = manager.source.common_dir
 
             def cancel_check() -> bool:
@@ -306,6 +322,81 @@ class FeatureSession:
 
     def result(self, feature_id: str) -> FeatureView:
         return self._read_only_view(feature_id)
+
+    def stats(self, feature_id: str) -> FeatureStats:
+        """Read one feature's journal and checkpoint without side effects."""
+
+        safe = normalize_feature_id(feature_id)
+        return self._stats_once(safe, retry=True)
+
+    def stats_all(self) -> tuple[list[FeatureStats], list[dict[str, str]]]:
+        """Enumerate routed features in sorted order without a repo-wide scan."""
+
+        ids = list_routing_ids(self._manager.source.common_dir)
+        features: list[FeatureStats] = []
+        failures: list[dict[str, str]] = []
+        for feature_id in ids:
+            try:
+                features.append(self._stats_once(feature_id, retry=True))
+            except LeanWeaveError as exc:
+                failures.append(
+                    {
+                        "feature_id": feature_id,
+                        "reason": str(exc)[:64] or "stats_unavailable",
+                    }
+                )
+        log.debug(
+            "[Session.stats] available=%s failed=%s",
+            len(features),
+            len(failures),
+        )
+        return features, failures
+
+    def _stats_once(self, feature_id: str, *, retry: bool) -> FeatureStats:
+        record = self._manager.lookup(feature_id)
+        root = Path(record.worktree_root)
+        archived = False
+        expected: str | None = None
+        if record.phase in {ProvisioningPhase.ARCHIVED, ProvisioningPhase.TOMBSTONE}:
+            if not record.archive_root:
+                raise WorktreeError("archive_missing")
+            root = Path(record.archive_root)
+            expected = workspace_identity(Path(record.worktree_root))
+            archived = True
+        store = JsonCheckpointStore(
+            root,
+            state_dir=record.state_dir,
+            expected_workspace=expected,
+        )
+        envelope = store.load_checkpoint(feature_id)
+        journal = JsonlMetricsCollector((root / record.state_dir).resolve())
+        snapshot = journal.reporting_snapshot(feature_id)
+        workflow = project_result(envelope.state, envelope.control)
+        result = project_feature_stats(
+            feature_id=feature_id,
+            state=envelope.state,
+            control=envelope.control,
+            workflow=workflow,
+            snapshot=snapshot,
+            archived=archived,
+        )
+        if retry:
+            # The route, checkpoint and journal are independent files. If the
+            # route moved during collection, discard the mixed snapshot once.
+            try:
+                current = read_routing(self._manager.source.common_dir, feature_id)
+                if (
+                    current.worktree_root != record.worktree_root
+                    or current.state_dir != record.state_dir
+                ):
+                    log.warning(
+                        "[Session.stats] feature=%s outcome=route_changed", feature_id
+                    )
+                    return self._stats_once(feature_id, retry=False)
+            except LeanWeaveError:
+                if not archived:
+                    raise
+        return result
 
     def cancel(self, feature_id: str) -> FeatureView:
         safe = normalize_feature_id(feature_id)

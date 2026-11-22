@@ -257,6 +257,21 @@ docs/             # human docs
 
 Canonical entry: `lean_weave:main` (`uv run lean-weave`). `src/main.py` is an IDE sample to remove/rehome later.
 
+## Token analytics and benchmarks
+
+Provider usage remains single-sourced in the atomic JSONL attempt journal. New
+read-only projections (`metrics/analytics.py`, `workflow/stats.py`) join
+canonical reservations/outcomes with the existing checkpoint and never book a
+second charge. `wl stats` exposes those views; provider totals, local
+estimates, cache observations and budget charge stay separately labeled.
+
+The installable `lean_weave.benchmark` package owns the shared fixture corpus,
+offline workflow driver, retrieval evaluation, matched-run schema, comparison
+eligibility and Markdown/JSON reporting. `benchmarks/` is a compatibility
+wrapper. `wl benchmark run` is offline by default; live evaluation requires
+explicit token/cost/deadline limits, external pricing, fixture configs and
+environment credentials, and never replaces existing output files.
+
 ## MVP 1 exclusions
 
 No MCP, ACP, Docker orchestration, background workers, multi-agent routers, or nested AI Factory agent launchers.

@@ -36,6 +36,10 @@ class ContextStageEvent:
     fragments: tuple[FragmentOrdinal, ...] = ()
     selection_estimates: tuple[tuple[str, int], ...] = ()
     wire_input_estimate: int = 0
+    selected_files: int = 0
+    selected_symbols: int = 0
+    map_rows: int = 0
+    estimator: str | None = None
     retrieval_ms: int = 0
     expansion_attempts: int = 0
     expansion_successes: int = 0
@@ -92,6 +96,10 @@ class _AttemptTelemetry:
     fragments: list[FragmentOrdinal] = field(default_factory=list)
     estimates: dict[str, int] = field(default_factory=dict)
     wire_input_estimate: int = 0
+    selected_files: int = 0
+    selected_symbols: int = 0
+    map_rows: int = 0
+    estimator: str | None = None
     outcome: str = "pending"
     refused: bool = False
     refusal_category: str | None = None
@@ -121,6 +129,10 @@ class _AttemptTelemetry:
                 sorted(self.estimates.items())[:MAX_SECTION_NAMES]
             ),
             wire_input_estimate=max(0, self.wire_input_estimate),
+            selected_files=max(0, self.selected_files),
+            selected_symbols=max(0, self.selected_symbols),
+            map_rows=max(0, self.map_rows),
+            estimator=self.estimator,
             retrieval_ms=max(0, self.retrieval_ms),
             expansion_attempts=max(0, self.expansion_attempts),
             expansion_successes=max(0, self.expansion_successes),

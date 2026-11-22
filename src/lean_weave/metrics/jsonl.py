@@ -21,13 +21,16 @@ from lean_weave.errors import BudgetExceededError, JournalError
 from lean_weave.logging_setup import get_logger
 from lean_weave.metrics.budget import charge_for_usage, reservation_charge
 from lean_weave.metrics.models import (
+    AttemptRecord,
     AttemptSummary,
     BudgetReservation,
     FeatureUsageSummary,
     JournalEvent,
     ModelUsageSummary,
     ReportedUsage,
+    ReportingSnapshot,
     StageUsageSummary,
+    UsageAttribution,
     UsageCounters,
     UsagePresence,
     normalize_usage,
@@ -41,6 +44,9 @@ JOURNAL_RELATIVE_PATH = Path("metrics") / "llm-usage.jsonl"
 JOURNAL_NAME = "llm-usage.jsonl"
 _LOCK_WAIT_S = 2.0
 _LOCK_RETRY_S = 0.01
+#: Read-only reporting bounds. Admission never applies these limits.
+REPORTING_MAX_BYTES = 64 * 1024 * 1024
+REPORTING_MAX_EVENTS = 100_000
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -187,26 +193,88 @@ class JsonlMetricsCollector:
             finally:
                 os.close(fd)
 
+    @contextlib.contextmanager
+    def _read_locked(self) -> Iterator[None]:
+        """Read-only lock over an existing journal; never creates layout."""
+
+        with _thread_lock(self._path):
+            if self._path.is_symlink():
+                raise JournalError("Usage journal must not be a symlink")
+            if not self._path.exists():
+                raise JournalError("Usage journal is absent")
+            if not _regular_file(self._path):
+                raise JournalError("Usage journal must be a regular file")
+            if self._lock_path.is_symlink() or not _regular_file(self._lock_path):
+                raise JournalError("Usage journal lock is unavailable for reporting")
+            try:
+                fd = os.open(
+                    self._lock_path,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                )
+            except OSError:
+                raise JournalError("Cannot open usage journal lock for reporting") from None
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise JournalError("Usage journal lock must be a regular file")
+                deadline = time.monotonic() + _LOCK_WAIT_S
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise JournalError("Usage journal is locked by another writer") from None
+                        time.sleep(_LOCK_RETRY_S)
+                    except OSError:
+                        raise JournalError("Usage journal locking is unavailable") from None
+                try:
+                    yield
+                finally:
+                    with contextlib.suppress(OSError):
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
     # -- replay ----------------------------------------------------------
 
-    def _read_events_locked(self) -> list[JournalEvent]:
+    def _read_events_locked(
+        self,
+        *,
+        max_bytes: int | None = None,
+        max_events: int | None = None,
+    ) -> list[JournalEvent]:
         try:
-            return self._read_events_locked_impl()
+            return self._read_events_locked_impl(
+                max_bytes=max_bytes, max_events=max_events
+            )
         except JournalError as exc:
             log.error("[Metrics.replay] outcome=failed code=%s", exc)
             raise
 
-    def _read_events_locked_impl(self) -> list[JournalEvent]:
+    def _read_events_locked_impl(
+        self,
+        *,
+        max_bytes: int | None = None,
+        max_events: int | None = None,
+    ) -> list[JournalEvent]:
         if self._path.is_symlink():
             raise JournalError("Usage journal must not be a symlink")
         if not self._path.exists():
             return []
         if not _regular_file(self._path):
             raise JournalError("Usage journal must be a regular file")
+        if max_bytes is not None:
+            try:
+                if self._path.stat().st_size > max_bytes:
+                    raise JournalError("Usage journal exceeds the reporting size bound")
+            except OSError:
+                raise JournalError("Cannot read usage journal") from None
         events: list[JournalEvent] = []
         try:
             with self._path.open("r", encoding="utf-8", errors="strict") as stream:
                 for number, line in enumerate(stream, start=1):
+                    if max_events is not None and number > max_events:
+                        raise JournalError("Usage journal exceeds the reporting event bound")
                     if not line.endswith("\n"):
                         raise JournalError(f"Usage journal has a partial trailing line ({number})")
                     text = line.strip()
@@ -260,6 +328,7 @@ class JsonlMetricsCollector:
                 or event.request_id != reservation.request_id
                 or event.attempt_id != reservation.attempt_id
                 or event.attempt_ordinal != reservation.attempt_ordinal
+                or event.attribution != reservation.attribution
             ):
                 raise JournalError("Usage journal outcome attribution conflicts with reservation")
             ended.add(event.reservation_id)
@@ -360,6 +429,62 @@ class JsonlMetricsCollector:
         output_cap: int,
         budget_tokens: int,
     ) -> BudgetReservation:
+        return self._reserve(
+            feature_id=feature_id,
+            stage=stage,
+            model_requested=model_requested,
+            request_id=request_id,
+            attempt_id=attempt_id,
+            attempt_ordinal=attempt_ordinal,
+            estimated_input_tokens=estimated_input_tokens,
+            output_cap=output_cap,
+            budget_tokens=budget_tokens,
+            attribution=None,
+        )
+
+    def reserve_attributed_attempt(
+        self,
+        *,
+        feature_id: str,
+        stage: GatewayStage,
+        model_requested: str,
+        request_id: str,
+        attempt_id: str,
+        attempt_ordinal: int,
+        estimated_input_tokens: int,
+        output_cap: int,
+        budget_tokens: int,
+        attribution: UsageAttribution,
+    ) -> BudgetReservation:
+        if not isinstance(attribution, UsageAttribution):
+            raise JournalError("Usage attribution must be validated before booking")
+        return self._reserve(
+            feature_id=feature_id,
+            stage=stage,
+            model_requested=model_requested,
+            request_id=request_id,
+            attempt_id=attempt_id,
+            attempt_ordinal=attempt_ordinal,
+            estimated_input_tokens=estimated_input_tokens,
+            output_cap=output_cap,
+            budget_tokens=budget_tokens,
+            attribution=attribution,
+        )
+
+    def _reserve(
+        self,
+        *,
+        feature_id: str,
+        stage: GatewayStage,
+        model_requested: str,
+        request_id: str,
+        attempt_id: str,
+        attempt_ordinal: int,
+        estimated_input_tokens: int,
+        output_cap: int,
+        budget_tokens: int,
+        attribution: UsageAttribution | None,
+    ) -> BudgetReservation:
         self._validate_attribution(feature_id, stage)
         if budget_tokens <= 0:
             raise JournalError("Feature token budget must be positive")
@@ -395,14 +520,16 @@ class JsonlMetricsCollector:
                 charge_tokens=charge,
                 reservation_charge=charge,
                 status="reserved",
+                attribution=attribution,
             )
             stored = self._append_locked(event)
         log.debug(
-            "[Metrics.reserve] feature=%s attempt=%s ordinal=%s charge=%s",
+            "[Metrics.reserve] feature=%s attempt=%s ordinal=%s charge=%s attribution=%s",
             feature_id,
             attempt_id,
             attempt_ordinal,
             charge,
+            attribution is not None,
         )
         return BudgetReservation(
             reservation_id=attempt_id,
@@ -416,6 +543,7 @@ class JsonlMetricsCollector:
             estimated_input_tokens=stored.estimated_input_tokens or 0,
             output_cap=stored.output_cap or 0,
             charge_tokens=stored.charge_tokens or 0,
+            attribution=stored.attribution,
         )
 
     def finalize_attempt(
@@ -480,6 +608,7 @@ class JsonlMetricsCollector:
                 error_code=error_code,
                 duration_ms=duration_ms,
                 finish_reason=finish_reason,
+                attribution=reservation.attribution,
             )
             stored = self._append_locked(event)
         log.debug(
@@ -563,7 +692,157 @@ class JsonlMetricsCollector:
             events = self._read_events_locked()
         return self._summary_from_events(events, feature_id)
 
+    def reporting_snapshot(
+        self,
+        feature_id: str,
+        *,
+        case_id: str | None = None,
+    ) -> ReportingSnapshot:
+        """Return one read-only reporting projection.
+
+        Unlike admission this never creates a directory, journal, or lock. A
+        missing journal is unavailable evidence, not a zero total. Bounds are
+        stable and never truncate silently.
+        """
+
+        if self._journal_absent():
+            return ReportingSnapshot(
+                feature_id=feature_id,
+                case_id=case_id,
+                available=False,
+                limit_reason="journal_absent",
+            )
+        try:
+            with self._read_locked():
+                events = self._read_events_locked(
+                    max_bytes=REPORTING_MAX_BYTES,
+                    max_events=REPORTING_MAX_EVENTS,
+                )
+        except JournalError as exc:
+            if "reporting" in str(exc):
+                return ReportingSnapshot(
+                    feature_id=feature_id,
+                    case_id=case_id,
+                    available=False,
+                    limit_reason="reporting_limit",
+                )
+            raise
+        snapshot = self._snapshot_from_events(events, feature_id, case_id)
+        log.debug(
+            "[Metrics.report] feature=%s attempts=%s legacy=%s available=%s",
+            feature_id,
+            len(snapshot.attempts),
+            snapshot.legacy_charge,
+            snapshot.available,
+        )
+        return snapshot
+
     # -- aggregation -----------------------------------------------------
+
+    def _snapshot_from_events(
+        self,
+        events: list[JournalEvent],
+        feature_id: str,
+        case_id: str | None,
+    ) -> ReportingSnapshot:
+        reservations: dict[str, JournalEvent] = {}
+        outcomes: dict[str, JournalEvent] = {}
+        legacy_charge = 0
+        measured_charge = 0
+        estimated_charge = 0
+        unresolved_charge = 0
+        budget_charge = 0
+        presence = UsagePresence()
+        records: list[AttemptRecord] = []
+        for item in events:
+            if item.event == "legacy_usage" and item.feature_id == feature_id:
+                charge = item.charge_tokens or 0
+                legacy_charge += charge
+                budget_charge += charge
+                if item.usage is not None and item.usage.counters.core_complete():
+                    measured_charge += charge
+                else:
+                    estimated_charge += charge
+                if item.usage is not None:
+                    presence = presence.merge(item.usage.counters)
+            elif item.event == "reservation" and item.feature_id == feature_id:
+                reservations[item.reservation_id or item.attempt_id] = item
+            elif item.event == "outcome" and item.feature_id == feature_id:
+                outcomes[item.reservation_id or item.attempt_id] = item
+        for reservation_id, reservation in reservations.items():
+            outcome = outcomes.get(reservation_id)
+            attribution = reservation.attribution
+            reserved = reservation.charge_tokens or 0
+            if outcome is None:
+                unresolved_charge += reserved
+                budget_charge += reserved
+                records.append(
+                    AttemptRecord(
+                        feature_id=feature_id,
+                        reservation_id=reservation_id,
+                        request_id=reservation.request_id,
+                        attempt_id=reservation.attempt_id,
+                        attempt_ordinal=reservation.attempt_ordinal,
+                        stage=reservation.stage,
+                        task_id=(attribution.task_id if attribution else None),
+                        strategy=(attribution.strategy if attribution else None),
+                        stage_attempt=(attribution.stage_attempt if attribution else None),
+                        model_requested=reservation.model_requested,
+                        status="unresolved",
+                        charge_tokens=reserved,
+                        estimated_input_tokens=reservation.estimated_input_tokens,
+                        output_cap=reservation.output_cap,
+                    )
+                )
+                continue
+            usage = outcome.usage
+            counters = usage.counters if usage is not None else UsageCounters()
+            charge, measured = charge_for_usage(usage, reserved=reserved)
+            budget_charge += charge
+            if measured:
+                measured_charge += charge
+            else:
+                estimated_charge += charge
+            if usage is not None:
+                presence = presence.merge(counters)
+            records.append(
+                AttemptRecord(
+                    feature_id=feature_id,
+                    reservation_id=reservation_id,
+                    request_id=reservation.request_id,
+                    attempt_id=reservation.attempt_id,
+                    attempt_ordinal=reservation.attempt_ordinal,
+                    stage=reservation.stage,
+                    task_id=(attribution.task_id if attribution else None),
+                    strategy=(attribution.strategy if attribution else None),
+                    stage_attempt=(attribution.stage_attempt if attribution else None),
+                    model_requested=reservation.model_requested,
+                    model_returned=outcome.model_returned,
+                    status=outcome.status or "error",
+                    error_code=outcome.error_code,
+                    finish_reason=outcome.finish_reason,
+                    duration_ms=outcome.duration_ms,
+                    counters=counters,
+                    charge_tokens=charge,
+                    measured=measured,
+                    estimated_input_tokens=reservation.estimated_input_tokens,
+                    output_cap=reservation.output_cap,
+                )
+            )
+        spent = self._spent_from_events(events, feature_id)
+        return ReportingSnapshot(
+            feature_id=feature_id,
+            case_id=case_id,
+            available=True,
+            attempts=records,
+            legacy_charge=legacy_charge,
+            budget_charge=budget_charge,
+            measured_charge=measured_charge,
+            estimated_charge=estimated_charge,
+            unresolved_charge=unresolved_charge,
+            spent=spent,
+            presence=presence,
+        )
 
     @staticmethod
     def _spent_from_events(events: list[JournalEvent], feature_id: str) -> int:
@@ -651,6 +930,9 @@ class JsonlMetricsCollector:
                         attempt_ordinal=reservation.attempt_ordinal,
                         is_retry=reservation.attempt_ordinal > 0,
                         stage=reservation.stage,
+                        task_id=(reservation.attribution.task_id if reservation.attribution else None),
+                        strategy=(reservation.attribution.strategy if reservation.attribution else None),
+                        stage_attempt=(reservation.attribution.stage_attempt if reservation.attribution else None),
                         model_requested=reservation.model_requested,
                         status="unresolved",
                         charge_tokens=reserved,
@@ -701,6 +983,9 @@ class JsonlMetricsCollector:
                     attempt_ordinal=reservation.attempt_ordinal,
                     is_retry=reservation.attempt_ordinal > 0,
                     stage=reservation.stage,
+                    task_id=(reservation.attribution.task_id if reservation.attribution else None),
+                    strategy=(reservation.attribution.strategy if reservation.attribution else None),
+                    stage_attempt=(reservation.attribution.stage_attempt if reservation.attribution else None),
                     model_requested=reservation.model_requested,
                     model_returned=outcome.model_returned,
                     status=status,

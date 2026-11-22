@@ -912,6 +912,7 @@ class WorkflowContextAdapter:
     def _begin(self, stage: str) -> None:
         self._attempt_stage = stage
         self._telemetry = _AttemptTelemetry(stage=stage, mode=self.mode)
+        self._telemetry.cache.available = bool(getattr(self.cache, "enabled", False))
         self._finished = False
         self._forced = []
         self._dirty = False
@@ -943,6 +944,12 @@ class WorkflowContextAdapter:
         )
         self._telemetry.wire_input_estimate = pack.metrics.input_tokens
         self._telemetry.duplicate_fragments += pack.metrics.deduplicated
+        self._telemetry.selected_files = len({fragment.path for fragment in pack.fragments})
+        self._telemetry.selected_symbols = sum(
+            1 for fragment in pack.fragments if fragment.kind == "definition"
+        )
+        self._telemetry.map_rows = len(pack.map_rows)
+        self._telemetry.estimator = pack.metrics.estimator
 
     def _finish(self, outcome: str) -> None:
         if self._finished:

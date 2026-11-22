@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks import fixtures as fixtures_mod
-from benchmarks.fixtures import (
+from lean_weave.benchmark import fixtures as fixtures_mod
+from lean_weave.benchmark.fixtures import (
     CASE_IDS,
     FixtureError,
     apply_intended_edit,

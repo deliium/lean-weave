@@ -50,7 +50,9 @@ from lean_weave.metrics.models import (
     AttemptJournal,
     BudgetReservation,
     ReportedUsage,
+    UsageAttribution,
     normalize_usage,
+    parse_usage_attribution,
 )
 from lean_weave.schemas.models import TokenUsage
 
@@ -75,6 +77,7 @@ class PreparedRequest:
     reasoning_effort: str | None
     output_cap: int
     retry_limit: int
+    attribution: UsageAttribution | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,7 @@ class DeepSeekProvider:
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
         id_factory: Callable[[], str] | None = None,
+        post_settlement_policy: Callable[[BudgetReservation], None] | None = None,
     ) -> None:
         if client is not None and transport is not None:
             raise ValueError("inject either an SDK client or a transport, not both")
@@ -120,6 +124,7 @@ class DeepSeekProvider:
         self._clock = clock
         self._sleep = sleeper
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
+        self._post_settlement_policy = post_settlement_policy
         self._owned_client = False
         self._owned_http = False
         self._http_client: httpx2.Client | None = None
@@ -219,6 +224,12 @@ class DeepSeekProvider:
             max_output_tokens=self._config.max_output_tokens,
         )
         retry_limit = self._retry_limit(options)
+        try:
+            attribution = parse_usage_attribution(request.get("usage_attribution"))
+        except ValueError:
+            raise UnsupportedLLMRequest("Usage attribution is invalid") from None
+        if stage == PROBE_STAGE and attribution is not None:
+            raise UnsupportedLLMRequest("Probe requests cannot carry attribution")
 
         return PreparedRequest(
             feature_id=feature_id,
@@ -232,6 +243,7 @@ class DeepSeekProvider:
             reasoning_effort=normalized.reasoning_effort,
             output_cap=normalized.output_cap,
             retry_limit=retry_limit,
+            attribution=attribution,
         )
 
     @staticmethod
@@ -308,16 +320,12 @@ class DeepSeekProvider:
         attempt_ordinal = 0
         while True:
             attempt_id = f"{request_id}-a{attempt_ordinal}"
-            reservation = self._journal.reserve_attempt(
-                feature_id=prepared.feature_id,
-                stage=prepared.stage,
-                model_requested=prepared.model,
+            reservation = self._reserve(
+                prepared=prepared,
                 request_id=request_id,
                 attempt_id=attempt_id,
                 attempt_ordinal=attempt_ordinal,
-                estimated_input_tokens=estimated_input,
-                output_cap=prepared.output_cap,
-                budget_tokens=self._feature_token_budget,
+                estimated_input=estimated_input,
             )
             log.debug(
                 "[DeepSeek.attempt] attempt=%s ordinal=%s reserved=%s",
@@ -341,6 +349,7 @@ class DeepSeekProvider:
                     duration_ms=duration_ms,
                     error_code=failure.code,
                 )
+                self._after_settlement(reservation)
                 log.warning(
                     "[DeepSeek.attempt] failed attempt=%s code=%s retryable=%s usage=%s",
                     attempt_id,
@@ -377,6 +386,7 @@ class DeepSeekProvider:
                     finish_reason=finish_reason,
                     error_code=getattr(exc, "code", "invalid_completion"),
                 )
+                self._after_settlement(reservation)
                 log.warning(
                     "[DeepSeek.attempt] invalid attempt=%s code=%s usage=%s",
                     attempt_id,
@@ -406,6 +416,7 @@ class DeepSeekProvider:
                 duration_ms=duration_ms,
                 finish_reason=finish_reason,
             )
+            self._after_settlement(reservation)
             log.info(
                 "[DeepSeek.attempt] success attempt=%s duration_ms=%s usage=%s",
                 attempt_id,
@@ -430,6 +441,45 @@ class DeepSeekProvider:
                 usage_reported=usage is not None,
                 structured=structured,
             )
+
+    def _after_settlement(self, reservation: BudgetReservation) -> None:
+        """Trusted benchmark-only stop hook after the outcome is durable."""
+
+        policy = self._post_settlement_policy
+        if policy is not None:
+            policy(reservation)
+
+    def _reserve(
+        self,
+        *,
+        prepared: PreparedRequest,
+        request_id: str,
+        attempt_id: str,
+        attempt_ordinal: int,
+        estimated_input: int,
+    ) -> BudgetReservation:
+        """Book exactly once, with attribution only when it is durable."""
+
+        common = {
+            "feature_id": prepared.feature_id,
+            "stage": prepared.stage,
+            "model_requested": prepared.model,
+            "request_id": request_id,
+            "attempt_id": attempt_id,
+            "attempt_ordinal": attempt_ordinal,
+            "estimated_input_tokens": estimated_input,
+            "output_cap": prepared.output_cap,
+            "budget_tokens": self._feature_token_budget,
+        }
+        if prepared.attribution is not None:
+            attributed = getattr(self._journal, "reserve_attributed_attempt", None)
+            if callable(attributed):
+                return attributed(**common, attribution=prepared.attribution)
+            log.debug(
+                "[DeepSeek.attribution] outcome=journal_capability_missing stage=%s",
+                prepared.stage,
+            )
+        return self._journal.reserve_attempt(**common)
 
     def _wire_request(self, prepared: PreparedRequest) -> dict[str, Any]:
         return project_wire(

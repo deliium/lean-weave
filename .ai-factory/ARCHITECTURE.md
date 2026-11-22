@@ -153,6 +153,16 @@ than source bodies. The DeepSeek adapter attaches a local wire guard validated
 before gateway booking or transport. `app.py::create_context_packer` is lazy; no
 index maintenance, stage prompt change, or orchestrator dependency is added.
 
+`metrics/analytics.py` and `workflow/stats.py` are read-only reporting
+projections over the existing atomic attempt journal and control checkpoint.
+They never book a second charge or create a second telemetry store.
+`wl stats` exposes feature and checkout views; absent evidence is unavailable,
+not zero, and in-flight/legacy records are marked partial. `benchmark/` is the
+installed deterministic benchmark core (packaged fixtures, offline workflow and
+retrieval suites, run/compare/report schema, threshold eligibility, explicit
+live admission), with `benchmarks/` retained as a compatibility wrapper. V1
+workflow defaults, budgets and verification paths are unchanged.
+
 ## ADRs
 
 | ADR | Topic |

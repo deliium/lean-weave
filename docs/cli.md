@@ -39,6 +39,11 @@ uv run wl --config settings.yaml --log-level DEBUG --log-format json config show
 | `wl cancel FEATURE` | Finalize an idle run or publish a durable cancellation request for an active run |
 | `wl worktree inspect FEATURE` | Read-only worktree routing and cleanliness inspection |
 | `wl worktree cleanup FEATURE --confirm` | Archive recognized state and remove an eligible clean managed worktree; never deletes the branch |
+| `wl stats [--json]` | Read-only checkout-wide feature usage/context statistics |
+| `wl stats feature FEATURE [--json]` | Read-only feature, stage, task, model and strategy breakdown |
+| `wl benchmark run --suite workflow\|retrieval\|all --output FILE [--case ID] [--variant NAME] [--repeats N]` | Deterministic offline suite; live flags add explicit token/cost/deadline/pricing limits |
+| `wl benchmark compare BASELINE CANDIDATE --axis strategy\|map\|budget\|cache\|revision [--thresholds FILE] [--json]` | Paired comparison with optional regression gates |
+| `wl benchmark report RESULT [--output FILE]` | Markdown report from a versioned run result |
 | `wl --help` | Show commands and global options |
 
 Initialization and all help paths bypass config loading. This supports repair:

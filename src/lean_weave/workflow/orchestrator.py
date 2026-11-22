@@ -9,6 +9,7 @@ messages.
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -65,9 +66,13 @@ from lean_weave.workflow.stages import (
     transition,
 )
 from lean_weave.workflow.state import (
+    MAX_OBSERVED_ATTEMPTS,
+    MAX_OBSERVED_CONTEXTS,
+    ContextObservation,
     ControlRecord,
     EffectKind,
     PendingEffect,
+    StageAttemptObservation,
     checkpoint_capability,
     normalize_feature_id,
 )
@@ -142,6 +147,8 @@ class MinimalWorkflowOrchestrator:
         self._context_lifecycle = context_lifecycle
         self._state: FeatureState | None = None
         self._control: ControlRecord | None = None
+        self._attempt_started_at: float | None = None
+        self._attempt_contexts: list[ContextObservation] = []
 
     # ------------------------------------------------------------------
     # Public workflow contract
@@ -215,6 +222,15 @@ class MinimalWorkflowOrchestrator:
                 self._state.stage.value,
             )
             return self._state
+        if self._control.open_attempt is not None:
+            log.warning(
+                "[Orchestrator.resume] feature=%s outcome=interrupted_attempt ordinal=%s",
+                feature_id,
+                self._control.open_attempt.ordinal,
+            )
+            self._close_attempt("interrupted", partial=True)
+            self._control.telemetry_incomplete = True
+            self._persist()
         if self._authority_digest is not None:
             frozen = self._control.authority_digest
             if frozen is None or frozen != self._authority_digest:
@@ -335,6 +351,7 @@ class MinimalWorkflowOrchestrator:
         control = self._control
         baseline_before = self._capture_baseline()
         if control is not None:
+            self._begin_attempt("plan", None)
             control.inflight_stage = Stage.PLAN.value
             self._persist()
         bundle = None
@@ -350,8 +367,10 @@ class MinimalWorkflowOrchestrator:
                 )
             except ContextPreparationError as exc:
                 adapter.refuse(exc)
+                self._capture_adapter_context(adapter, outcome="refused")
                 self._context_refusal(exc)
                 return
+            self._capture_adapter_context(adapter, outcome="prepared")
             request = prepared.request
             outcome = run_tool_loop(
                 self._provider,
@@ -370,9 +389,11 @@ class MinimalWorkflowOrchestrator:
                 response_format=request.get("response_format"),
                 cancel_check=self._cancel_check,
                 round_builder=lambda _suffix: request,
+                attribution=self._attribution(None, "v2"),
             )
         else:
             bundle = self._context.build("plan", state)
+            self._capture_v1_context(bundle, outcome="prepared")
             request = build_plan_request(
                 bundle,
                 instructions=fragments,
@@ -394,9 +415,11 @@ class MinimalWorkflowOrchestrator:
                 thinking=self._thinking,
                 response_format=request.response_format,
                 cancel_check=self._cancel_check,
+                attribution=self._attribution(None, "v1"),
             )
         if outcome.overage:
             self._accumulate_metrics(outcome)
+            self._close_attempt("overage")
             if prepared is not None and adapter is not None:
                 adapter.finish_stage("overage")
             log.warning(
@@ -407,12 +430,14 @@ class MinimalWorkflowOrchestrator:
             raise WorkflowBudgetExceeded(FEATURE_TOKEN_OVERAGE)
         if outcome.cancelled:
             self._accumulate_metrics(outcome)
+            self._close_attempt("cancelled")
             if prepared is not None and adapter is not None:
                 adapter.finish_stage("cancelled")
             self._terminal(WorkflowStatus.CANCELLED, "cancelled")
             return
         if outcome.exhausted:
             self._accumulate_metrics(outcome)
+            self._close_attempt("exhausted")
             if prepared is not None and adapter is not None:
                 adapter.finish_stage("exhausted")
             self._terminal(WorkflowStatus.FAILED, "plan_call_unavailable")
@@ -420,6 +445,8 @@ class MinimalWorkflowOrchestrator:
         if outcome.refused:
             self._accumulate_metrics(outcome)
             if adapter is not None and prepared is not None:
+                self._capture_adapter_context(adapter, outcome="refused")
+                self._close_attempt("refused")
                 adapter.refuse(
                     ContextPreparationError(
                         outcome.refusal_category or "context_insufficient",
@@ -447,6 +474,7 @@ class MinimalWorkflowOrchestrator:
                 adapter.finish_stage("baseline_drift")
             self._terminal(WorkflowStatus.FAILED, "baseline_drift")
             return
+        self._close_attempt("planned")
         state.plan = plan
         state.active_task_id = None
         transition(state, "planned")
@@ -511,6 +539,7 @@ class MinimalWorkflowOrchestrator:
             return
         state.active_task_id = task.id
         task.status = TaskStatus.IN_PROGRESS
+        self._begin_attempt("implement", task.id)
         self._persist()
         log.info(
             "[Orchestrator.implement] feature=%s task=%s outcome=start",
@@ -528,6 +557,7 @@ class MinimalWorkflowOrchestrator:
             self._terminal(WorkflowStatus.FAILED, "missing_plan")
             return
         operation_id = f"check-{uuid.uuid4().hex}"
+        self._begin_attempt("verify", state.active_task_id)
         self._begin_check_effect(operation_id, state.active_task_id)
         try:
             result = self._verification.run(state)
@@ -573,6 +603,7 @@ class MinimalWorkflowOrchestrator:
         active = candidates[0]
         active.status = TaskStatus.PENDING
         state.active_task_id = active.id
+        self._close_attempt("failed", verification=result)
         transition(state, "fail")
         self._persist()
         log.warning(
@@ -606,6 +637,7 @@ class MinimalWorkflowOrchestrator:
             self._terminal(WorkflowStatus.FAILED, "invalid_retry_state")
             return
         task.status = TaskStatus.IN_PROGRESS
+        self._begin_attempt("retry", task.id)
         self._persist()
         log.info(
             "[Orchestrator.retry] feature=%s task=%s outcome=start",
@@ -631,6 +663,7 @@ class MinimalWorkflowOrchestrator:
         messages: list[Any] = []
         output_cap = self._output_cap
         fallback_read_paths: Sequence[str] | None = None
+        strategy = "v1"
         if adapter is not None:
             try:
                 prepared = adapter.prepare_tool_stage(
@@ -644,6 +677,7 @@ class MinimalWorkflowOrchestrator:
                 fallback_cap = adapter.fallback_output_cap
                 fallback_paths = adapter.fallback_read_paths
                 adapter.refuse(exc)
+                self._capture_adapter_context(adapter, outcome="refused")
                 if not (
                     stage == "implement"
                     and adapter.fallback_allowed
@@ -663,7 +697,11 @@ class MinimalWorkflowOrchestrator:
                 read_override = prepared.read_override
                 round_builder = prepared.round_builder
                 output_cap = prepared.output_cap
+                strategy = "v2"
+                self._capture_adapter_context(adapter, outcome="prepared")
         if prepared is None:
+            if adapter is not None and fallback_read_paths is not None:
+                strategy = "v1_fallback"
             bundle = self._context.build(stage, state)  # type: ignore[arg-type]
             if adapter is not None and fallback_read_paths is not None:
                 estimate = bundle.get("estimated_tokens")
@@ -678,6 +716,7 @@ class MinimalWorkflowOrchestrator:
                         )
                     )
                     return
+            self._capture_v1_context(bundle, outcome="prepared")
             messages = list(bundle.get("messages") or [])
             if fragments:
                 messages = _append_trusted_instructions(messages, fragments)
@@ -716,6 +755,7 @@ class MinimalWorkflowOrchestrator:
             thinking=self._thinking,
             cancel_check=self._cancel_check,
             round_builder=round_builder,
+            attribution=self._attribution(scope, strategy),
         )
         self._accumulate_metrics(outcome)
         if outcome.refused:
@@ -726,6 +766,8 @@ class MinimalWorkflowOrchestrator:
                         outcome.refusal_reason or "context_refused",
                     )
                 )
+                self._capture_adapter_context(adapter, outcome="refused")
+            self._close_attempt("refused")
             control = self._control
             if control is not None and control.pending_effect is not None:
                 if control.pending_effect.confirmed:
@@ -742,8 +784,10 @@ class MinimalWorkflowOrchestrator:
             )
             return
         if outcome.overage:
+            self._close_attempt("overage")
             raise WorkflowBudgetExceeded(FEATURE_TOKEN_OVERAGE)
         if outcome.cancelled:
+            self._close_attempt("cancelled")
             if prepared is not None:
                 prepared.finish("cancelled")
             control = self._control
@@ -756,6 +800,7 @@ class MinimalWorkflowOrchestrator:
             self._terminal(WorkflowStatus.CANCELLED, "cancelled")
             return
         if outcome.unconfirmed:
+            self._close_attempt("unconfirmed")
             if prepared is not None:
                 prepared.finish("unconfirmed")
             effect = None
@@ -770,6 +815,7 @@ class MinimalWorkflowOrchestrator:
             self._interrupt("committed_unconfirmed", effect=effect)
             return
         if outcome.exhausted:
+            self._close_attempt("exhausted")
             if prepared is not None:
                 prepared.finish("exhausted")
             self._terminal(WorkflowStatus.FAILED, "task_loop_exhausted")
@@ -790,6 +836,7 @@ class MinimalWorkflowOrchestrator:
         task.outcome_digest = _digest(outcome)
         state.active_task_id = None
         event = "task_done" if stage == "implement" else "requeue"
+        self._close_attempt("done")
         transition(state, event)
         self._persist()
         if prepared is not None:
@@ -803,11 +850,146 @@ class MinimalWorkflowOrchestrator:
         )
 
     # ------------------------------------------------------------------
+    # Bounded workflow/context telemetry
+    # ------------------------------------------------------------------
+    def _begin_attempt(self, stage: str, task_id: str | None) -> int | None:
+        control = self._control
+        if control is None:
+            return None
+        if control.open_attempt is not None:
+            self._close_attempt("interrupted", partial=True)
+            control.telemetry_incomplete = True
+        ordinal = control.next_stage_attempt
+        control.next_stage_attempt = ordinal + 1
+        control.open_attempt = StageAttemptObservation(
+            ordinal=ordinal,
+            stage=stage[:16],
+            task_id=task_id,
+            status="open",
+        )
+        self._attempt_started_at = time.monotonic()
+        self._attempt_contexts = []
+        log.debug(
+            "[Orchestrator.telemetry] feature=%s stage=%s ordinal=%s outcome=begin",
+            self._require_state().feature_id,
+            stage,
+            ordinal,
+        )
+        return ordinal
+
+    def _attribution(self, task_id: str | None, strategy: str) -> dict[str, Any] | None:
+        control = self._control
+        if control is None or control.open_attempt is None:
+            return None
+        return {
+            "task_id": task_id,
+            "strategy": strategy,
+            "stage_attempt": control.open_attempt.ordinal,
+        }
+
+    def _capture_adapter_context(self, adapter: Any, *, outcome: str) -> None:
+        telemetry = getattr(adapter, "telemetry", None)
+        if telemetry is None:
+            return
+        frozen = telemetry.freeze()
+        observation = ContextObservation(
+            mode=frozen.mode,
+            outcome=outcome,
+            selected_files=frozen.selected_files,
+            selected_symbols=frozen.selected_symbols,
+            map_rows=frozen.map_rows,
+            pack_input_tokens=frozen.wire_input_estimate,
+            section_tokens=dict(frozen.selection_estimates),
+            estimator=frozen.estimator,
+            repeated_fragments=frozen.duplicate_fragments,
+            repeated_bytes=frozen.duplicate_bytes,
+            expansion_attempts=frozen.expansion_attempts,
+            expansion_successes=frozen.expansion_successes,
+            cache_hits=frozen.cache_hits,
+            cache_misses=frozen.cache_misses,
+            cache_observations_available=frozen.cache_observations_available,
+            retrieval_ms=frozen.retrieval_ms,
+            refused=frozen.refused,
+            refusal_category=frozen.refusal_category,
+        )
+        self._append_context(observation)
+
+    def _capture_v1_context(self, bundle: Any, *, outcome: str) -> None:
+        pack = bundle.get("pack") if isinstance(bundle, Mapping) else None
+        estimate = bundle.get("estimated_tokens") if isinstance(bundle, Mapping) else None
+        selected_files: int | None = None
+        selected_symbols: int | None = None
+        section_tokens: dict[str, int] = {}
+        if pack is not None:
+            paths = {
+                item.path for item in getattr(pack, "excerpts", ())
+            } | set(getattr(pack, "relevant_paths", ()) or ())
+            selected_files = len(paths)
+            selected_symbols = len(getattr(pack, "symbols", ()) or ())
+            estimate = getattr(pack, "estimated_tokens", estimate)
+            section_tokens = {"source": int(getattr(pack, "estimated_tokens", 0) or 0)}
+        observation = ContextObservation(
+            mode="v1",
+            outcome=outcome,
+            selected_files=selected_files,
+            selected_symbols=selected_symbols,
+            pack_input_tokens=estimate if isinstance(estimate, int) else None,
+            section_tokens=section_tokens,
+            estimator="conservative_estimate",
+            cache_observations_available=False,
+        )
+        self._append_context(observation)
+
+    def _append_context(self, observation: ContextObservation) -> None:
+        if len(self._attempt_contexts) < MAX_OBSERVED_CONTEXTS:
+            self._attempt_contexts.append(observation)
+
+    def _close_attempt(
+        self,
+        status: str,
+        *,
+        verification: Any | None = None,
+        partial: bool = False,
+    ) -> None:
+        control = self._control
+        if control is None or control.open_attempt is None:
+            return
+        attempt = control.open_attempt
+        started = self._attempt_started_at
+        duration = 0 if partial or started is None else max(
+            0, int((time.monotonic() - started) * 1000)
+        )
+        attempt.status = status[:32]
+        attempt.duration_ms = duration
+        attempt.context = list(self._attempt_contexts[:MAX_OBSERVED_CONTEXTS])
+        if verification is not None:
+            verification_status = getattr(verification, "status", None)
+            attempt.verification_status = getattr(verification_status, "value", verification_status)
+            attempt.verification_blocking = bool(getattr(verification, "blocking", False))
+        control.active_ms_total += duration
+        control.closed_attempts.append(attempt)
+        if len(control.closed_attempts) > MAX_OBSERVED_ATTEMPTS:
+            control.closed_attempts.pop(0)
+            control.truncated_attempts += 1
+        control.open_attempt = None
+        self._attempt_started_at = None
+        self._attempt_contexts = []
+        log.debug(
+            "[Orchestrator.telemetry] feature=%s stage=%s ordinal=%s outcome=%s duration_ms=%s",
+            self._require_state().feature_id,
+            attempt.stage,
+            attempt.ordinal,
+            attempt.status,
+            duration,
+        )
+
+    # ------------------------------------------------------------------
     # Terminal and interrupt helpers
     # ------------------------------------------------------------------
     def _terminal(self, status: WorkflowStatus, reason: str) -> FeatureState:
         state = self._require_state()
         reason = _reason(reason, status.value)
+        self._close_attempt(status.value, verification=state.verification)
         terminal(state, status, reason)
         if self._control is not None:
             self._control.terminal_status = status
@@ -854,6 +1036,7 @@ class MinimalWorkflowOrchestrator:
 
     def _interrupt(self, reason: str, *, effect: PendingEffect | None = None) -> FeatureState:
         state = self._require_state()
+        self._close_attempt("interrupted", verification=state.verification, partial=True)
         if self._control is not None and state.stage is not Stage.INTERRUPTED:
             tasks = list(state.plan.tasks) if state.plan is not None else []
             self._control.continuation = capture_continuation(

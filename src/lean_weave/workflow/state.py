@@ -35,9 +35,12 @@ log = get_logger("workflow.state")
 ENVELOPE_VERSION = 1
 CONTROL_VERSION = 1
 LIFECYCLE_CONTROL_VERSION = 1
+TELEMETRY_CONTROL_VERSION = 1
 MAX_STATE_BYTES = 1_048_576
 MAX_EFFECT_PATHS = 32
 MAX_FEATURE_ID_CHARS = 128
+MAX_OBSERVED_ATTEMPTS = 128
+MAX_OBSERVED_CONTEXTS = 8
 _WORKSPACE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FEATURE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _RESERVED_FEATURE_IDS = frozenset({"__llm_probe__"})
@@ -92,6 +95,52 @@ class ScopeSpend(_StateModel):
 
 class TaskSpend(ScopeSpend):
     """Per-task cumulative debit carried across attempts and resumes."""
+
+
+class ContextObservation(_StateModel):
+    """Bounded numeric context evidence; never source text or paths."""
+
+    mode: str = Field(default="v1", max_length=32)
+    outcome: str = Field(default="unknown", max_length=32)
+    selected_files: int | None = Field(default=None, ge=0)
+    selected_symbols: int | None = Field(default=None, ge=0)
+    map_rows: int | None = Field(default=None, ge=0)
+    pack_input_tokens: int | None = Field(default=None, ge=0)
+    section_tokens: dict[str, int] = Field(default_factory=dict)
+    estimator: str | None = Field(default=None, max_length=32)
+    repeated_fragments: int | None = Field(default=None, ge=0)
+    repeated_bytes: int | None = Field(default=None, ge=0)
+    expansion_attempts: int | None = Field(default=None, ge=0)
+    expansion_successes: int | None = Field(default=None, ge=0)
+    cache_hits: int | None = Field(default=None, ge=0)
+    cache_misses: int | None = Field(default=None, ge=0)
+    cache_observations_available: bool = False
+    retrieval_ms: int | None = Field(default=None, ge=0)
+    refused: bool = False
+    refusal_category: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def bound_sections(self) -> "ContextObservation":
+        allowed = {"system", "task", "map", "source", "tool", "wire"}
+        self.section_tokens = {
+            key: value
+            for key, value in list(self.section_tokens.items())[:MAX_OBSERVED_CONTEXTS]
+            if key in allowed and isinstance(value, int) and value >= 0
+        }
+        return self
+
+
+class StageAttemptObservation(_StateModel):
+    ordinal: int = Field(ge=1)
+    stage: str = Field(min_length=1, max_length=16)
+    task_id: str | None = Field(default=None, max_length=MAX_FEATURE_ID_CHARS)
+    status: str = Field(default="open", max_length=32)
+    duration_ms: int = Field(default=0, ge=0)
+    verification_status: str | None = Field(default=None, max_length=32)
+    verification_blocking: bool | None = None
+    context: list[ContextObservation] = Field(
+        default_factory=list, max_length=MAX_OBSERVED_CONTEXTS
+    )
 
 
 class EffectKind(str, Enum):
@@ -152,6 +201,16 @@ class ControlRecord(_StateModel):
     # Durable in-flight stage marker. A crash that leaves this set means the
     # stage outcome checkpoint never landed; resume must fail closed.
     inflight_stage: str | None = Field(default=None, max_length=16)
+    # Optional bounded telemetry (v2-07). Absent on legacy envelopes.
+    telemetry_version: int = Field(default=TELEMETRY_CONTROL_VERSION, ge=1)
+    next_stage_attempt: int = Field(default=1, ge=1)
+    open_attempt: StageAttemptObservation | None = None
+    closed_attempts: list[StageAttemptObservation] = Field(
+        default_factory=list, max_length=MAX_OBSERVED_ATTEMPTS
+    )
+    truncated_attempts: int = Field(default=0, ge=0)
+    active_ms_total: int = Field(default=0, ge=0)
+    telemetry_incomplete: bool = False
 
 
 class CheckpointEnvelope(_StateModel):
@@ -333,7 +392,12 @@ class JsonCheckpointStore:
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
-    def _encode(self, envelope: CheckpointEnvelope) -> bytes:
+    @property
+    def max_bytes(self) -> int:
+        return self._max_bytes
+
+    @staticmethod
+    def _serialize(envelope: CheckpointEnvelope) -> bytes:
         try:
             text = json.dumps(
                 envelope.model_dump(mode="json"),
@@ -343,7 +407,31 @@ class JsonCheckpointStore:
             )
         except (TypeError, ValueError):
             raise StateError("Cannot encode checkpoint") from None
-        data = text.encode("utf-8")
+        return text.encode("utf-8")
+
+    def _encode(self, envelope: CheckpointEnvelope) -> bytes:
+        data = self._serialize(envelope)
+        if len(data) <= self._max_bytes:
+            return data
+        control = envelope.control
+        # Optional observations are dropped before a previously valid
+        # checkpoint is ever failed for telemetry.
+        while control.closed_attempts and len(data) > self._max_bytes:
+            control.closed_attempts.pop(0)
+            control.truncated_attempts += 1
+            data = self._serialize(envelope)
+        if len(data) > self._max_bytes and control.open_attempt is not None:
+            if control.open_attempt.context:
+                control.open_attempt.context = []
+                data = self._serialize(envelope)
+        if len(data) > self._max_bytes and control.open_attempt is not None:
+            control.telemetry_incomplete = True
+            control.next_stage_attempt = max(control.next_stage_attempt, 1)
+            control.open_attempt = None
+            data = self._serialize(envelope)
+        if len(data) > self._max_bytes and not control.telemetry_incomplete:
+            control.telemetry_incomplete = True
+            data = self._serialize(envelope)
         if len(data) > self._max_bytes:
             raise StateCorrupt("Checkpoint exceeds the size bound")
         return data

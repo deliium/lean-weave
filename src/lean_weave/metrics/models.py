@@ -10,20 +10,58 @@ import json
 import math
 from typing import Any, Literal, Mapping, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from lean_weave.contracts._types import GatewayStage
+from lean_weave.contracts._types import ContextStrategy, GatewayStage
 from lean_weave.schemas.models import TokenUsage
 
 EVENT_VERSION = 1
 MAX_USAGE_BYTES = 16_384
 MAX_USAGE_DEPTH = 6
+MAX_ATTRIBUTION_CHARS = 128
 
 _SECRET_KEYS = ("api_key", "apikey", "authorization", "password", "secret", "credential")
 
 
 class AccountingModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class UsageAttribution(AccountingModel):
+    """Trusted local attribution for one gateway dispatch.
+
+    These values never come from model text. ``task_id`` follows the existing
+    plan ID contract, ``strategy`` names the actual context selector, and
+    ``stage_attempt`` is the workflow stage-attempt ordinal (1-based).
+    """
+
+    task_id: str | None = Field(default=None, max_length=MAX_ATTRIBUTION_CHARS)
+    strategy: ContextStrategy | None = None
+    stage_attempt: int | None = Field(default=None, ge=1)
+
+    @field_validator("task_id")
+    @classmethod
+    def validate_task_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip() or any(ord(char) < 32 for char in value):
+            raise ValueError("invalid task attribution")
+        return value
+
+
+def parse_usage_attribution(value: Any) -> UsageAttribution | None:
+    """Validate untrusted local attribution; return ``None`` when absent.
+
+    Malformed attribution is rejected by the gateway before any booking.
+    """
+
+    if value is None:
+        return None
+    if isinstance(value, UsageAttribution):
+        return value
+    if not isinstance(value, Mapping):
+        raise ValueError("usage attribution must be a mapping")
+    return UsageAttribution.model_validate(dict(value))
 
 
 class UsageCounters(AccountingModel):
@@ -81,6 +119,7 @@ class JournalEvent(AccountingModel):
     error_code: str | None = Field(default=None, max_length=64)
     duration_ms: int | None = Field(default=None, ge=0)
     finish_reason: str | None = Field(default=None, max_length=64)
+    attribution: UsageAttribution | None = None
     legacy: bool = False
 
 
@@ -96,6 +135,7 @@ class BudgetReservation(AccountingModel):
     estimated_input_tokens: int = Field(ge=0)
     output_cap: int = Field(ge=0)
     charge_tokens: int = Field(ge=0)
+    attribution: UsageAttribution | None = None
 
 
 class UsagePresence(AccountingModel):
@@ -122,6 +162,9 @@ class AttemptSummary(AccountingModel):
     attempt_ordinal: int
     is_retry: bool
     stage: str
+    task_id: str | None = None
+    strategy: ContextStrategy | None = None
+    stage_attempt: int | None = None
     model_requested: str
     model_returned: str | None = None
     status: str
@@ -179,6 +222,57 @@ class FeatureUsageSummary(AccountingModel):
     unresolved_charge: int = 0
 
 
+class AttemptRecord(AccountingModel):
+    """One canonical reservation/outcome pair for reporting.
+
+    Unresolved reservations have ``status == "unresolved"`` and no outcome
+    counters. Optional counters remain ``None`` when the provider omitted them.
+    """
+
+    feature_id: str
+    reservation_id: str | None = None
+    request_id: str
+    attempt_id: str
+    attempt_ordinal: int = Field(ge=0)
+    stage: str
+    task_id: str | None = None
+    strategy: ContextStrategy | None = None
+    stage_attempt: int | None = None
+    model_requested: str
+    model_returned: str | None = None
+    status: str
+    error_code: str | None = None
+    finish_reason: str | None = None
+    duration_ms: int | None = None
+    counters: UsageCounters = Field(default_factory=UsageCounters)
+    charge_tokens: int = Field(default=0, ge=0)
+    measured: bool = False
+    estimated_input_tokens: int | None = Field(default=None, ge=0)
+    output_cap: int | None = Field(default=None, ge=0)
+    legacy: bool = False
+
+    @property
+    def measured_total(self) -> int | None:
+        return self.counters.measured_total()
+
+
+class ReportingSnapshot(AccountingModel):
+    """Read-only projection of one feature's journal evidence."""
+
+    feature_id: str
+    case_id: str | None = None
+    available: bool = True
+    attempts: list[AttemptRecord] = Field(default_factory=list)
+    legacy_charge: int = Field(default=0, ge=0)
+    budget_charge: int = Field(default=0, ge=0)
+    measured_charge: int = Field(default=0, ge=0)
+    estimated_charge: int = Field(default=0, ge=0)
+    unresolved_charge: int = Field(default=0, ge=0)
+    spent: int = Field(default=0, ge=0)
+    presence: UsagePresence = Field(default_factory=UsagePresence)
+    limit_reason: str | None = None
+
+
 class AttemptJournal(Protocol):
     """Narrow accounting boundary used by the gateway."""
 
@@ -214,6 +308,26 @@ class AttemptJournal(Protocol):
         ...
 
     def summary(self, feature_id: str) -> FeatureUsageSummary:
+        ...
+
+
+class AttributedAttemptJournal(AttemptJournal, Protocol):
+    """Optional journal capability: reserve with trusted attribution."""
+
+    def reserve_attributed_attempt(
+        self,
+        *,
+        feature_id: str,
+        stage: GatewayStage,
+        model_requested: str,
+        request_id: str,
+        attempt_id: str,
+        attempt_ordinal: int,
+        estimated_input_tokens: int,
+        output_cap: int,
+        budget_tokens: int,
+        attribution: UsageAttribution,
+    ) -> BudgetReservation:
         ...
 
 

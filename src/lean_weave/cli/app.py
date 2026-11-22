@@ -7,6 +7,7 @@ from typer.core import TyperGroup
 
 from lean_weave.errors import LeanWeaveError
 from lean_weave.logging_setup import get_logger, redact_console_message
+from lean_weave.cli.commands.benchmark import benchmark_app
 from lean_weave.cli.commands.cache import cache_app
 from lean_weave.cli.commands.config import config_app
 from lean_weave.cli.commands.context import context_app
@@ -23,6 +24,7 @@ from lean_weave.cli.commands.index import index_app
 from lean_weave.cli.commands.init import initialize
 from lean_weave.cli.commands.llm import llm_app
 from lean_weave.cli.commands.map import map_app
+from lean_weave.cli.commands.stats import stats_app
 from lean_weave.cli.options import LogFormat
 
 log = get_logger("cli")
@@ -56,6 +58,8 @@ app.add_typer(llm_app, name="llm")
 app.add_typer(index_app, name="index")
 app.add_typer(map_app, name="map")
 app.add_typer(cache_app, name="cache")
+app.add_typer(stats_app, name="stats")
+app.add_typer(benchmark_app, name="benchmark")
 
 
 @app.callback()

@@ -1,0 +1,151 @@
+[
+  {
+    "id": "bug_fix_add",
+    "repository": "bug_fix",
+    "split": "development",
+    "task_kind": "bugfix",
+    "query": "fix add returns wrong result",
+    "relevant_paths": ["src/calc.py"],
+    "relevant_ranges": [{"path": "src/calc.py", "start_line": 1, "end_line": 2}],
+    "required_dependencies": [],
+    "symbols": [
+      {"path": "src/calc.py", "qualified_name": "calc.add", "start_line": 1}
+    ]
+  },
+  {
+    "id": "multi_file_banner",
+    "repository": "multi_file_feature",
+    "split": "development",
+    "task_kind": "feature",
+    "query": "banner VERSION config",
+    "relevant_paths": ["src/config.py", "src/app.py"],
+    "relevant_ranges": [
+      {"path": "src/app.py", "start_line": 4, "end_line": 5},
+      {"path": "src/config.py", "start_line": 1, "end_line": 1}
+    ],
+    "required_dependencies": [
+      {"path": "src/config.py", "start_line": 1, "end_line": 1}
+    ],
+    "symbols": [
+      {"path": "src/app.py", "qualified_name": "app.banner", "start_line": 4}
+    ]
+  },
+  {
+    "id": "dev_auth_login",
+    "repository": "dev_auth",
+    "split": "development",
+    "task_kind": "bugfix",
+    "query": "login session",
+    "relevant_paths": ["auth/session.py", "auth/routes.py"],
+    "relevant_ranges": [
+      {"path": "auth/session.py", "start_line": 1, "end_line": 2},
+      {"path": "auth/routes.py", "start_line": 1, "end_line": 5}
+    ],
+    "required_dependencies": [
+      {"path": "auth/session.py", "start_line": 1, "end_line": 2}
+    ],
+    "symbols": [
+      {"path": "auth/session.py", "qualified_name": "auth.session.login", "start_line": 1}
+    ]
+  },
+  {
+    "id": "dev_auth_login_overlap",
+    "repository": "dev_auth",
+    "split": "development",
+    "task_kind": "bugfix",
+    "query": "login",
+    "relevant_paths": ["auth/session.py"],
+    "relevant_ranges": [
+      {"path": "auth/session.py", "start_line": 1, "end_line": 2},
+      {"path": "auth/session.py", "start_line": 1, "end_line": 1}
+    ],
+    "required_dependencies": []
+  },
+  {
+    "id": "dev_auth_refactor_importer",
+    "repository": "dev_auth",
+    "split": "development",
+    "task_kind": "refactor",
+    "query": "login",
+    "relevant_paths": ["auth/session.py", "auth/routes.py"],
+    "relevant_ranges": [
+      {"path": "auth/session.py", "start_line": 1, "end_line": 2},
+      {"path": "auth/routes.py", "start_line": 1, "end_line": 1}
+    ],
+    "required_dependencies": []
+  },
+  {
+    "id": "dev_auth_test",
+    "repository": "dev_auth",
+    "split": "development",
+    "task_kind": "test",
+    "query": "login",
+    "relevant_paths": ["auth/session.py", "tests/test_session.py"],
+    "relevant_ranges": [
+      {"path": "auth/session.py", "start_line": 1, "end_line": 2},
+      {"path": "tests/test_session.py", "start_line": 1, "end_line": 5}
+    ],
+    "required_dependencies": []
+  },
+  {
+    "id": "holdout_invoice",
+    "repository": "holdout_billing",
+    "split": "holdout",
+    "task_kind": "feature",
+    "query": "render_invoice total",
+    "relevant_paths": ["pkg/invoice.py", "pkg/client.py", "notes.md"],
+    "relevant_ranges": [
+      {"path": "pkg/invoice.py", "start_line": 6, "end_line": 7},
+      {"path": "notes.md", "start_line": 1, "end_line": 1}
+    ],
+    "required_dependencies": [
+      {"path": "pkg/invoice.py", "start_line": 1, "end_line": 3}
+    ],
+    "symbols": [
+      {
+        "path": "pkg/invoice.py",
+        "qualified_name": "pkg.invoice.render_invoice",
+        "start_line": 6
+      }
+    ]
+  },
+  {
+    "id": "holdout_invoice_tight",
+    "repository": "holdout_billing",
+    "split": "holdout",
+    "task_kind": "feature",
+    "query": "render_invoice total",
+    "relevant_paths": ["pkg/invoice.py"],
+    "relevant_ranges": [
+      {"path": "pkg/invoice.py", "start_line": 6, "end_line": 7}
+    ],
+    "required_dependencies": [
+      {"path": "pkg/invoice.py", "start_line": 1, "end_line": 3},
+      {"path": "pkg/client.py", "start_line": 1, "end_line": 1}
+    ],
+    "symbols": [
+      {
+        "path": "pkg/invoice.py",
+        "qualified_name": "pkg.invoice.render_invoice",
+        "start_line": 6
+      }
+    ]
+  },
+  {
+    "id": "holdout_diagnose",
+    "repository": "holdout_billing",
+    "split": "holdout",
+    "task_kind": "diagnose",
+    "query": "render_invoice",
+    "relevant_paths": ["pkg/invoice.py"],
+    "relevant_ranges": [
+      {"path": "pkg/invoice.py", "start_line": 6, "end_line": 7}
+    ],
+    "required_dependencies": [
+      {"path": "pkg/invoice.py", "start_line": 1, "end_line": 3}
+    ],
+    "expected_ranges": [
+      {"path": "pkg/invoice.py", "start_line": 6, "end_line": 7}
+    ]
+  }
+]

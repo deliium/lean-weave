@@ -130,6 +130,22 @@ that the live diff is unavailable.
 Cleanup with an incomplete cleanliness probe, an unknown file under the state
 directory, or unprovable state reports manual recovery instead of guessing.
 
+## Usage statistics
+
+`wl stats` and `wl stats feature <id>` read the same routing record, checkpoint
+and journal used by `status` / `result`; they never provision, diff, verify,
+construct a provider or mutate state. Checkout inventory enumerates routed
+feature IDs in sorted order only. Archived features read the moved checkpoint
+and journal under the same recorded state directory, so live and archived
+totals match.
+
+Reports separate workflow status from provider evidence: a `success` feature
+can still have an unavailable or partial journal. A missing journal is
+`unavailable`, not zero. Corrupt evidence under an unchanged route fails with a
+stable typed error; inventory keeps valid rows and reports per-feature failures
+with partial coverage. The default text output is human-readable; `--json`
+emits a versioned machine view. Diagnostics go to stderr.
+
 ## State locations
 
 - Routing records: private `lean-weave/` under the Git common directory

@@ -1,0 +1,5 @@
+{
+  "files": {
+    "src/small.py": "def mark():\n    return \"stamped\"\n"
+  }
+}
