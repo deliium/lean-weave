@@ -99,6 +99,14 @@ scope filtering, lexical backend reporting, Git signals, and final witness
 checks remain live. A warm map or pack can reuse rows, but it still evaluates
 the current budget and current source revisions.
 
+Opt-in dependency coverage reuses the same path-local facts and packing spans.
+It does **not** persist dependency links, closure traversals, ambiguity
+outcomes, ready packs, or expansion receipts. Each pack rebuilds proof from the
+live scoped read universe; a competing admitted module outside the emit set can
+invalidate proof even when emitted fragment digests are unchanged. Sibling
+worktrees keep separate cache keys, so warm proof on one worktree never
+supplies foreign dependency context to another.
+
 ## Maintenance and recovery
 
 `wl cache rebuild`:

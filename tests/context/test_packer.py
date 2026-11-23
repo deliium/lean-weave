@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lean_weave.config.models import ContextConfig, PackingConfig
+from lean_weave.code_index import CodeIndex
+from lean_weave.config.models import ContextConfig, DependencyCoverageConfig, PackingConfig
 from lean_weave.context.packer import ContextPacker
 from lean_weave.context.packing_models import ExpansionRequest, SymbolSelector
 from lean_weave.context.packing_models import PackRequest
@@ -11,6 +12,7 @@ from lean_weave.context.packing_source import slice_lines
 from lean_weave.context.repository import Repository
 from lean_weave.context.retrieval_models import RetrievalResult
 from lean_weave.context.retriever import ContextRetriever
+from lean_weave.repository_map import RepositoryMap
 
 
 def packing(**overrides) -> PackingConfig:
@@ -29,8 +31,24 @@ def packing(**overrides) -> PackingConfig:
     return PackingConfig(**base)
 
 
-def make_packer(project: Path, *, config: PackingConfig | None = None, counter=None, load_graph=None):
-    context = ContextConfig(packing=config or packing())
+def make_packer(
+    project: Path,
+    *,
+    config: PackingConfig | None = None,
+    counter=None,
+    load_graph=None,
+    dependency_coverage: DependencyCoverageConfig | None = None,
+    context_config: ContextConfig | None = None,
+):
+    context = context_config or ContextConfig(
+        packing=config or packing(),
+        dependency_coverage=dependency_coverage or DependencyCoverageConfig(),
+    )
+    if config is not None and context_config is None:
+        context = ContextConfig(
+            packing=config,
+            dependency_coverage=dependency_coverage or DependencyCoverageConfig(),
+        )
     repository = Repository(project, context, strict_source=True)
     retriever = ContextRetriever(repository, load_graph=load_graph)
     return ContextPacker(
@@ -116,6 +134,68 @@ def test_required_large_function_is_not_clipped(project: Path):
     assert result.status == "insufficient_context"
     assert "required_source_over_budget" in result.reason_codes
     assert result.pack is not None and result.pack.fragments == ()
+
+
+def test_dependency_coverage_adds_imported_definition_before_map(tmp_path: Path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    cache = tmp_path / "cache"
+    cache.mkdir(mode=0o700)
+    (root / "models").mkdir(parents=True)
+    (root / "models" / "__init__.py").write_text("")
+    (root / "models" / "widget.py").write_text(
+        "class HarborWidget:\n    def spin(self):\n        return 1\n"
+    )
+    (root / "service").mkdir(parents=True)
+    (root / "service" / "__init__.py").write_text("")
+    (root / "service" / "runner.py").write_text(
+        "from models.widget import HarborWidget\n\n"
+        "def activate(item: HarborWidget):\n    return item.spin()\n"
+    )
+    index = CodeIndex(root, cache_base=cache, context_config=ContextConfig())
+    index.build()
+    service = RepositoryMap(index)
+
+    def load_graph(scan):
+        return service.graph_for_retrieval_scan(scan)
+
+    packer = make_packer(
+        root,
+        load_graph=load_graph,
+        dependency_coverage=DependencyCoverageConfig(enabled=True, max_depth=1),
+    )
+    disabled = make_packer(root, load_graph=load_graph)
+    enabled = packer.build(
+        request(
+            query="activate HarborWidget",
+            required_paths=("service/runner.py",),
+        )
+    )
+    baseline = disabled.build(
+        request(
+            query="activate HarborWidget",
+            required_paths=("service/runner.py",),
+        )
+    )
+    assert enabled.status == "ready" and baseline.status == "ready"
+    assert enabled.pack is not None and baseline.pack is not None
+    assert enabled.pack.dependency_coverage is not None
+    assert enabled.pack.dependency_coverage.enabled is True
+    assert baseline.pack.dependency_coverage is None
+    paths = {item.path for item in enabled.pack.fragments}
+    assert "models/widget.py" in paths
+    assert any(
+        row.relationship == "imported_definition" for row in enabled.pack.dependency_evidence
+    )
+
+
+def test_dependency_coverage_disabled_matches_legacy_wire(basic_repo: Path):
+    packer = make_packer(basic_repo)
+    result = packer.build(request())
+    assert result.status == "ready"
+    assert result.pack is not None
+    assert result.pack.dependency_coverage is None
+    assert result.pack.dependency_evidence == ()
 
 
 def test_optional_giant_body_is_omitted_not_trimmed(project: Path):

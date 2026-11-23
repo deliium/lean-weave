@@ -75,6 +75,56 @@ and the cumulative cap must be at least the source cap. Existing
 `map_rows_max` still apply. No migration is required; older files keep these
 defaults.
 
+## Dependency coverage (opt-in)
+
+Nested under `context.dependency_coverage`. Disabled by default. When enabled,
+L1 packing resolves verified definitions referenced by selected fragments
+(imported names, AST references, scoped import/symbol evidence) before map
+rows are filled, under an independent sub-budget:
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `enabled` | `false` | Opt-in; disabled packs omit all dependency fields |
+| `max_depth` | `2` | 0–4 hops from selected seeds |
+| `max_definitions` | `8` | 0–32 newly selected definitions |
+| `max_tokens` | `1024` | 0–8192; also capped by remaining source/total budget |
+
+```yaml
+context:
+  dependency_coverage:
+    enabled: true
+    max_depth: 2
+    max_definitions: 8
+    max_tokens: 1024
+```
+
+Behavior:
+
+- Deterministic static analysis only; no LLM expansion.
+- Ambiguous or off-scope references become `dependency_uncertain` diagnostics,
+  never invented targets.
+- Enabled L2 receipts bind the analyzer contract version, policy caps, seed
+  interval, and exact resolved relationships; delivery re-proves those links
+  against the original checked read universe even when fragment digests are
+  unchanged (forged or newly ambiguous relationships refuse without dispatch).
+- Sessions freeze the open-time lookup paths and read predicate. Call-site
+  expand filters may reject emission of a required dependency group, but they
+  cannot hide competitors to manufacture uniqueness.
+- Mandatory dependency limits refuse as `dependency_limit:*` (mapped to
+  `budget_exhausted` / `oversized` in workflow); optional groups are omitted as
+  a unit. Global token caps are never bypassed.
+- Enabled `wl context build|inspect --packed` exposes
+  `dependency_coverage`, `dependency_evidence`, and `dependency_issues`
+  (inspect never includes fragment text). `wl context budget` stays numeric
+  only. Disabled packed payloads stay byte-compatible with prior V2 output.
+- Enabling the policy (or changing its caps) participates in the V2 authority
+  digest; disabled configs omit the subtree so unchanged checkpoints keep
+  their digest.
+
+Development-set comparisons for this policy live under
+`tests/retrieval_dependencies/`. They are not a blind holdout or release
+certification.
+
 ## Accounting
 
 Local composition reports one of two estimator kinds:
@@ -257,7 +307,16 @@ input, dedup decisions, emitted duplicate lines, missing required symbols and
 dependencies, map-row count and section token estimates. The paired release
 run is reported in [v2-readiness.md](v2-readiness.md); a holdout required
 dependency is currently missing because the enclosing class declaration is not
-packed.
+packed. That historical holdout result is unchanged evidence and is **not** a
+development fixture for dependency coverage.
+
+Independent development-set comparison
+(`tests/retrieval_dependencies`, arms `v1` / `v2` / `candidate` with
+`dependency_coverage.enabled`) measured micro-recall 0.50 / 0.57 / 1.00 and
+missing required intervals 7 / 6 / 0 on the frozen coverage cases, with ready
+wire input about 11% above the V2 control and under the 20% suite ceiling.
+These figures are development-set only; a new blind holdout is required before
+any generalization or release claim.
 
 ## See also
 

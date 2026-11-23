@@ -15,10 +15,22 @@ from dataclasses import dataclass, field
 from functools import cmp_to_key
 from typing import Any, Callable, Mapping, Sequence
 
+from lean_weave.code_index.identity import resolve_checkout
+from lean_weave.context.dependency_coverage import (
+    ANALYZER_CONTRACT_VERSION,
+    ISSUE_ANALYSIS_LIMIT,
+    RELATION_IMPORT_DECL,
+    DependencyAnalyzer,
+    DependencyRef,
+)
 from lean_weave.context.models import iter_lines
 from lean_weave.context.policy import is_python
 from lean_weave.context.packing_models import (
     CandidateRef,
+    DependencyCoverageSummary,
+    DependencyEvidenceRow,
+    DependencyIssueRow,
+    DependencyProofLink,
     ExpansionDelivery,
     ExpansionRequest,
     FragmentRef,
@@ -67,6 +79,7 @@ from lean_weave.context.packing_tokens import (
     supports_counter,
     tool_section_text,
 )
+from lean_weave.context.python_index import extract_python_facts
 from lean_weave.context.repository import FileSnapshot, Repository, SourceScan
 from lean_weave.context_cache.facts import FactCache
 from lean_weave.context_cache.map_rows import MapRowCache
@@ -94,8 +107,11 @@ from lean_weave.errors import (
 )
 from lean_weave.logging_setup import get_logger
 from lean_weave.repository_map.models import DependencyGraph
+from lean_weave.repository_map.service import scoped_graph_for_scan
 
 log = get_logger("context.packer")
+
+REASON_DEPENDENCY_UNCERTAIN = "dependency_uncertain"
 
 _DIRECT_SIGNALS = frozenset({"exact_symbol", "name", "lexical"})
 _EVIDENCE_SIGNALS = frozenset(
@@ -130,6 +146,8 @@ class Composition:
     model: str = ""
     thinking: str = "disabled"
     output_tokens: int = 0
+    lookup_paths: frozenset[str] | None = None
+    read_filter: Any = None
 
 
 class ContextPacker:
@@ -260,6 +278,8 @@ class ContextPacker:
             candidates=outcome.candidates,
             relations=tuple(outcome.relations),
             cumulative_units=outcome.cumulative_units,
+            lookup_paths=outcome.lookup_paths,
+            read_filter=outcome.read_filter,
             file_chars={
                 fragment.path: sum(
                     len(item.text) for item in outcome.fragments if item.path == fragment.path
@@ -311,6 +331,8 @@ class ContextPacker:
             candidates=outcome.candidates,
             relations=tuple(outcome.relations),
             cumulative_units=outcome.cumulative_units,
+            lookup_paths=outcome.lookup_paths,
+            read_filter=outcome.read_filter,
             file_chars={
                 fragment.path: sum(
                     len(item.text) for item in outcome.fragments if item.path == fragment.path
@@ -458,6 +480,21 @@ class ContextPacker:
                 None,
             )
         assert isinstance(outcome, Composition)
+        outcome = Composition(
+            result=outcome.result,
+            revisions=outcome.revisions,
+            fragments=outcome.fragments,
+            candidates=outcome.candidates,
+            relations=outcome.relations,
+            policy=outcome.policy,
+            root_binding=outcome.root_binding,
+            cumulative_units=outcome.cumulative_units,
+            model=outcome.model,
+            thinking=outcome.thinking,
+            output_tokens=outcome.output_tokens,
+            lookup_paths=frozenset(scan_paths) if scan_paths is not None else None,
+            read_filter=read_filter,
+        )
         if batch is not None and self._cache is not None:
             if outcome.result.status == "ready":
                 self._cache.flush(batch)
@@ -883,6 +920,28 @@ class ContextPacker:
                     request, reason, "required_fit", envelope, assembly
                 )
 
+        dependency_coverage: DependencyCoverageSummary | None = None
+        dependency_evidence: tuple[DependencyEvidenceRow, ...] = ()
+        dependency_issues: tuple[DependencyIssueRow, ...] = ()
+        if request.level == "l1" and self.context_config.dependency_coverage.enabled:
+            closure = self._apply_dependency_coverage(
+                request,
+                catalog=catalog,
+                scan=scan,
+                seeds=tuple(normalized_required),
+                envelope=envelope,
+                counter_state=counter_state,
+                selected_output=selected_output,
+                rows=(),
+            )
+            if closure.failure is not None:
+                return closure.failure
+            normalized_required = list(closure.units)
+            assembly = closure.assembly
+            dependency_coverage = closure.summary
+            dependency_evidence = closure.evidence
+            dependency_issues = closure.issues
+
         rows: list[dict[str, str]] = []
         map_revision: str | None = None
         if graph is not None:
@@ -962,6 +1021,9 @@ class ContextPacker:
                 lambda a, b: self._compare_optional(a, b)
             )
         )
+        coverage_incomplete = bool(
+            dependency_coverage is not None and not dependency_coverage.coverage_complete
+        )
         for hit, unit in optional:
             if unit is None:
                 continue
@@ -981,7 +1043,25 @@ class ContextPacker:
             if not self._char_caps_allow(units, unit):
                 omitted.append(PackOmission(reason="oversize", path=unit.path))
                 continue
-            trial_units = [*units, unit]
+            trial_group = [unit]
+            if (
+                self.context_config.dependency_coverage.enabled
+                and dependency_coverage is not None
+            ):
+                optional_closure = self._optional_dependency_units(
+                    catalog=catalog,
+                    scan=scan,
+                    seed=unit,
+                    covered=units,
+                    selected_output=selected_output,
+                )
+                if optional_closure is None:
+                    coverage_incomplete = True
+                    omitted.append(PackOmission(reason="budget", path=unit.path))
+                    continue
+                closure_units, _proof_links, _charge = optional_closure
+                trial_group = [unit, *closure_units]
+            trial_units = [*units, *trial_group]
             trial = self._assemble(
                 system=request.system_instructions,
                 task=request.task_specification,
@@ -1005,7 +1085,13 @@ class ContextPacker:
                 units = trial_units
                 assembly = trial
             else:
+                coverage_incomplete = True
                 omitted.append(PackOmission(reason="budget", path=unit.path))
+
+        if dependency_coverage is not None and coverage_incomplete:
+            dependency_coverage = dependency_coverage.model_copy(
+                update={"coverage_complete": False, "status": "incomplete"}
+            )
 
         fragments = self._fragments(units)
         revisions = self._revisions(fragments, rows, catalog)
@@ -1029,6 +1115,9 @@ class ContextPacker:
             envelope=envelope,
             fragments=fragments,
             revisions=revisions,
+            dependency_coverage=dependency_coverage,
+            dependency_evidence=dependency_evidence,
+            dependency_issues=dependency_issues,
         )
         return result
 
@@ -1050,6 +1139,9 @@ class ContextPacker:
         envelope: "_EnvelopeView",
         fragments: tuple[PackedFragment, ...] | None = None,
         revisions: Mapping[str, str] | None = None,
+        dependency_coverage: DependencyCoverageSummary | None = None,
+        dependency_evidence: tuple[DependencyEvidenceRow, ...] = (),
+        dependency_issues: tuple[DependencyIssueRow, ...] = (),
     ) -> Composition:
         fragments = fragments if fragments is not None else self._fragments(units)
         revisions = (
@@ -1100,6 +1192,9 @@ class ContextPacker:
                 omitted=omitted,
                 cumulative=self._units_bytes(units),
             ),
+            dependency_coverage=dependency_coverage,
+            dependency_evidence=dependency_evidence,
+            dependency_issues=dependency_issues,
         )
         result = PackResult(status="ready", pack=pack)
         return Composition(
@@ -1115,6 +1210,492 @@ class ContextPacker:
             thinking=envelope.thinking,
             output_tokens=envelope.output_tokens,
         )
+
+    @dataclass(frozen=True)
+    class _DependencyClosure:
+        units: tuple[SourceUnit, ...]
+        assembly: Any
+        summary: DependencyCoverageSummary
+        evidence: tuple[DependencyEvidenceRow, ...]
+        issues: tuple[DependencyIssueRow, ...]
+        failure: Composition | None = None
+
+    def _dependency_token_ceiling(self, *, selected_output: int) -> int:
+        policy = self.context_config.dependency_coverage
+        available = max(0, self.packing_config.total_tokens - selected_output)
+        return min(
+            policy.max_tokens,
+            self.packing_config.source_tokens,
+            available,
+        )
+
+    def _proof_graph(self, scan: SourceScan) -> DependencyGraph:
+        return scoped_graph_for_scan(
+            scan,
+            facts_loader=extract_python_facts,
+            checkout_key=resolve_checkout(self.repository.root).key,
+            state_dir=self.repository.state_dir,
+            protected_paths=self.repository.protected_paths,
+            exclusions=tuple(self.context_config.exclusions),
+            candidate_bytes_max=self.context_config.candidate_bytes_max,
+        )
+
+    def _unit_from_dependency_ref(
+        self, catalog: PackingCatalog, ref: DependencyRef, *, relationship: str
+    ) -> SourceUnit | None:
+        if relationship == RELATION_IMPORT_DECL:
+            unit, reason = catalog.import_unit(
+                ref.path, ref.start_line, ref.end_line, reasons=("import_declaration",)
+            )
+            return unit if reason is None else None
+        snapshot = catalog.snapshot(ref.path)
+        if snapshot is None or snapshot.digest != ref.digest:
+            return None
+        return SourceUnit(
+            path=ref.path,
+            start_line=ref.start_line,
+            end_line=ref.end_line,
+            digest=ref.digest,
+            kind="definition",
+            text=slice_lines(snapshot.text, ref.start_line, ref.end_line),
+            reasons=("dependency_coverage",),
+        )
+
+    def _apply_dependency_coverage(
+        self,
+        request: PackRequest,
+        *,
+        catalog: PackingCatalog,
+        scan: SourceScan,
+        seeds: Sequence[SourceUnit],
+        envelope: "_EnvelopeView",
+        counter_state: _CounterState,
+        selected_output: int,
+        rows: Sequence[Mapping[str, str]],
+    ) -> "_DependencyClosure":
+        policy = self.context_config.dependency_coverage
+        ceiling = self._dependency_token_ceiling(selected_output=selected_output)
+        counter = ConservativeByteCounter()
+        proof_graph = self._proof_graph(scan)
+        analyzer = DependencyAnalyzer(catalog, proof_graph)
+        seed_refs = [
+            DependencyRef(
+                path=unit.path,
+                digest=unit.digest,
+                start_line=unit.start_line,
+                end_line=unit.end_line,
+            )
+            for unit in seeds
+        ]
+        covered = {
+            (unit.path, unit.digest, unit.start_line, unit.end_line) for unit in seeds
+        }
+        discovery = analyzer.discover(
+            seed_refs, covered=covered, max_depth=policy.max_depth
+        )
+        # Work-cap preventing analysis of a mandatory supported anchor is refusal.
+        for issue in discovery.issues:
+            if issue.reason == ISSUE_ANALYSIS_LIMIT:
+                failure = self._select_failure(
+                    request,
+                    f"dependency_limit:analysis_work",
+                    "dependency_analysis_limit",
+                    envelope,
+                )
+                return self._DependencyClosure(
+                    units=tuple(seeds),
+                    assembly=None,
+                    summary=DependencyCoverageSummary(
+                        enabled=True,
+                        status="refused",
+                        max_depth=policy.max_depth,
+                        max_definitions=policy.max_definitions,
+                        max_tokens=policy.max_tokens,
+                        effective_token_ceiling=ceiling,
+                        coverage_complete=False,
+                    ),
+                    evidence=(),
+                    issues=(),
+                    failure=failure,
+                )
+
+        added: list[SourceUnit] = []
+        evidence: list[DependencyEvidenceRow] = []
+        issue_rows: list[DependencyIssueRow] = []
+        charged_tokens = 0
+        definitions_added = 0
+        imports_added = 0
+        charged_keys: set[tuple[str, str, int, int]] = set(covered)
+        incomplete = False
+
+        for issue in discovery.issues:
+            incomplete = True
+            issue_rows.append(
+                DependencyIssueRow(
+                    origin_path=issue.origin.path,
+                    origin_start_line=issue.origin.start_line,
+                    origin_end_line=issue.origin.end_line,
+                    origin_digest=issue.origin.digest,
+                    reason=issue.reason,
+                    target_path=None if issue.target is None else issue.target.path,
+                    target_start_line=None
+                    if issue.target is None
+                    else issue.target.start_line,
+                    target_end_line=None if issue.target is None else issue.target.end_line,
+                    target_digest=None if issue.target is None else issue.target.digest,
+                )
+            )
+        for item in discovery.blocked_frontier:
+            incomplete = True
+            issue_rows.append(
+                DependencyIssueRow(
+                    origin_path=item.origin.path,
+                    origin_start_line=item.origin.start_line,
+                    origin_end_line=item.origin.end_line,
+                    origin_digest=item.origin.digest,
+                    reason=item.reason,
+                    target_path=None if item.target is None else item.target.path,
+                    target_start_line=None
+                    if item.target is None
+                    else item.target.start_line,
+                    target_end_line=None if item.target is None else item.target.end_line,
+                    target_digest=None if item.target is None else item.target.digest,
+                )
+            )
+
+        for group in discovery.groups:
+            group_units: list[SourceUnit] = []
+            group_costs: list[int] = []
+            group_links = []
+            for link in group.links:
+                if link.target is None:
+                    continue
+                key = (
+                    link.target.path,
+                    link.target.digest,
+                    link.target.start_line,
+                    link.target.end_line,
+                )
+                unit = self._unit_from_dependency_ref(
+                    catalog, link.target, relationship=link.relationship
+                )
+                if unit is None:
+                    failure = self._select_failure(
+                        request,
+                        REASON_DEPENDENCY_UNAVAILABLE,
+                        "dependency_materialization",
+                        envelope,
+                    )
+                    return self._DependencyClosure(
+                        units=tuple(seeds),
+                        assembly=None,
+                        summary=DependencyCoverageSummary(
+                            enabled=True,
+                            status="refused",
+                            max_depth=policy.max_depth,
+                            max_definitions=policy.max_definitions,
+                            max_tokens=policy.max_tokens,
+                            effective_token_ceiling=ceiling,
+                            coverage_complete=False,
+                        ),
+                        evidence=(),
+                        issues=tuple(issue_rows),
+                        failure=failure,
+                    )
+                cost = counter.count_text(render_source([unit]))
+                newly = key not in charged_keys
+                group_links.append((link, unit, cost, newly, key))
+                if newly:
+                    group_units.append(unit)
+                    group_costs.append(cost)
+
+            # Atomic group fit against dependency sub-cap and existing assemble.
+            trial_defs = definitions_added + sum(
+                1
+                for link, _unit, _cost, newly, _key in group_links
+                if newly and link.relationship != RELATION_IMPORT_DECL
+            )
+            trial_charge = charged_tokens + sum(group_costs)
+            if trial_defs > policy.max_definitions:
+                failure = self._select_failure(
+                    request,
+                    "dependency_limit:definitions",
+                    "dependency_definitions",
+                    envelope,
+                )
+                return self._DependencyClosure(
+                    units=tuple(seeds),
+                    assembly=None,
+                    summary=DependencyCoverageSummary(
+                        enabled=True,
+                        status="refused",
+                        max_depth=policy.max_depth,
+                        max_definitions=policy.max_definitions,
+                        max_tokens=policy.max_tokens,
+                        effective_token_ceiling=ceiling,
+                        definitions_added=definitions_added,
+                        imports_added=imports_added,
+                        charged_tokens=charged_tokens,
+                        coverage_complete=False,
+                    ),
+                    evidence=tuple(evidence),
+                    issues=tuple(issue_rows),
+                    failure=failure,
+                )
+            if trial_charge > ceiling:
+                failure = self._select_failure(
+                    request,
+                    "dependency_limit:tokens",
+                    "dependency_tokens",
+                    envelope,
+                )
+                return self._DependencyClosure(
+                    units=tuple(seeds),
+                    assembly=None,
+                    summary=DependencyCoverageSummary(
+                        enabled=True,
+                        status="refused",
+                        max_depth=policy.max_depth,
+                        max_definitions=policy.max_definitions,
+                        max_tokens=policy.max_tokens,
+                        effective_token_ceiling=ceiling,
+                        definitions_added=definitions_added,
+                        imports_added=imports_added,
+                        charged_tokens=charged_tokens,
+                        coverage_complete=False,
+                    ),
+                    evidence=tuple(evidence),
+                    issues=tuple(issue_rows),
+                    failure=failure,
+                )
+            trial_units = [*seeds, *added, *group_units]
+            growing = list([*seeds, *added])
+            for unit in group_units:
+                if not self._char_caps_allow(growing, unit):
+                    failure = self._select_failure(
+                        request,
+                        "dependency_limit:per_file_chars",
+                        "dependency_chars",
+                        envelope,
+                    )
+                    return self._DependencyClosure(
+                        units=tuple(seeds),
+                        assembly=None,
+                        summary=DependencyCoverageSummary(
+                            enabled=True,
+                            status="refused",
+                            max_depth=policy.max_depth,
+                            max_definitions=policy.max_definitions,
+                            max_tokens=policy.max_tokens,
+                            effective_token_ceiling=ceiling,
+                            definitions_added=definitions_added,
+                            imports_added=imports_added,
+                            charged_tokens=charged_tokens,
+                            coverage_complete=False,
+                        ),
+                        evidence=tuple(evidence),
+                        issues=tuple(issue_rows),
+                        failure=failure,
+                    )
+                growing.append(unit)
+            trial = self._assemble(
+                system=request.system_instructions,
+                task=request.task_specification,
+                units=trial_units,
+                rows=rows,
+                model=envelope.model,
+                thinking=envelope.thinking,
+                output_tokens=selected_output,
+                tools=envelope.tools,
+                replay=envelope.replay,
+                response_format=envelope.response_format,
+                counter_state=counter_state,
+                revisions=request.editable_revisions,
+            )
+            fit_reason = self._fit_failure(
+                trial,
+                units=trial_units,
+                cumulative=self._units_bytes(trial_units),
+            )
+            if fit_reason is not None:
+                mapped = {
+                    REASON_TOTAL_BUDGET: "dependency_limit:total",
+                    REASON_REQUIRED_SOURCE_OVER_BUDGET: "dependency_limit:source_section",
+                    REASON_CUMULATIVE_BUDGET: "dependency_limit:cumulative",
+                }.get(fit_reason, fit_reason)
+                if mapped.startswith(REASON_SECTION_BUDGET):
+                    mapped = "dependency_limit:source_section"
+                failure = self._select_failure(
+                    request, mapped, "dependency_fit", envelope, trial
+                )
+                return self._DependencyClosure(
+                    units=tuple(seeds),
+                    assembly=None,
+                    summary=DependencyCoverageSummary(
+                        enabled=True,
+                        status="refused",
+                        max_depth=policy.max_depth,
+                        max_definitions=policy.max_definitions,
+                        max_tokens=policy.max_tokens,
+                        effective_token_ceiling=ceiling,
+                        definitions_added=definitions_added,
+                        imports_added=imports_added,
+                        charged_tokens=charged_tokens,
+                        coverage_complete=False,
+                    ),
+                    evidence=tuple(evidence),
+                    issues=tuple(issue_rows),
+                    failure=failure,
+                )
+
+            for link, unit, cost, newly, key in group_links:
+                evidence.append(
+                    DependencyEvidenceRow(
+                        origin_path=link.origin.path,
+                        origin_start_line=link.origin.start_line,
+                        origin_end_line=link.origin.end_line,
+                        origin_digest=link.origin.digest,
+                        target_path=link.target.path if link.target else None,
+                        target_start_line=link.target.start_line if link.target else None,
+                        target_end_line=link.target.end_line if link.target else None,
+                        target_digest=link.target.digest if link.target else None,
+                        reference_line=link.reference_line,
+                        relationship=link.relationship,
+                        reason=link.selection_reason,
+                        depth=link.depth,
+                        estimated_unit_cost=cost,
+                        newly_charged=newly,
+                    )
+                )
+                if newly:
+                    charged_keys.add(key)
+                    added.append(unit)
+                    charged_tokens += cost
+                    if link.relationship == RELATION_IMPORT_DECL:
+                        imports_added += 1
+                    else:
+                        definitions_added += 1
+
+        final_units = tuple([*seeds, *added])
+        assembly = self._assemble(
+            system=request.system_instructions,
+            task=request.task_specification,
+            units=final_units,
+            rows=rows,
+            model=envelope.model,
+            thinking=envelope.thinking,
+            output_tokens=selected_output,
+            tools=envelope.tools,
+            replay=envelope.replay,
+            response_format=envelope.response_format,
+            counter_state=counter_state,
+            revisions=request.editable_revisions,
+        )
+        summary = DependencyCoverageSummary(
+            enabled=True,
+            status="incomplete" if incomplete else "complete",
+            max_depth=policy.max_depth,
+            max_definitions=policy.max_definitions,
+            max_tokens=policy.max_tokens,
+            effective_token_ceiling=ceiling,
+            definitions_added=definitions_added,
+            imports_added=imports_added,
+            charged_tokens=charged_tokens,
+            coverage_complete=not incomplete,
+        )
+        log.debug(
+            "[Packer.dependency] definitions=%s imports=%s charged=%s complete=%s issues=%s",
+            definitions_added,
+            imports_added,
+            charged_tokens,
+            not incomplete,
+            len(issue_rows),
+        )
+        return self._DependencyClosure(
+            units=final_units,
+            assembly=assembly,
+            summary=summary,
+            evidence=tuple(evidence),
+            issues=tuple(issue_rows),
+        )
+
+    def _optional_dependency_units(
+        self,
+        *,
+        catalog: PackingCatalog,
+        scan: SourceScan,
+        seed: SourceUnit,
+        covered: Sequence[SourceUnit],
+        selected_output: int,
+    ) -> tuple[list[SourceUnit], tuple[DependencyProofLink, ...], int] | None:
+        """Return closure units, proof links and charged tokens, or None if unfit."""
+
+        policy = self.context_config.dependency_coverage
+        ceiling = self._dependency_token_ceiling(selected_output=selected_output)
+        counter = ConservativeByteCounter()
+        analyzer = DependencyAnalyzer(catalog, self._proof_graph(scan))
+        covered_keys = {
+            (unit.path, unit.digest, unit.start_line, unit.end_line) for unit in covered
+        }
+        covered_keys.add((seed.path, seed.digest, seed.start_line, seed.end_line))
+        discovery = analyzer.discover(
+            [
+                DependencyRef(
+                    path=seed.path,
+                    digest=seed.digest,
+                    start_line=seed.start_line,
+                    end_line=seed.end_line,
+                )
+            ],
+            covered=covered_keys,
+            max_depth=policy.max_depth,
+        )
+        added: list[SourceUnit] = []
+        proof_links: list[DependencyProofLink] = []
+        charge = 0
+        defs = 0
+        for group in discovery.groups:
+            for link in group.links:
+                if link.target is None:
+                    continue
+                key = (
+                    link.target.path,
+                    link.target.digest,
+                    link.target.start_line,
+                    link.target.end_line,
+                )
+                if key in covered_keys:
+                    continue
+                unit = self._unit_from_dependency_ref(
+                    catalog, link.target, relationship=link.relationship
+                )
+                if unit is None:
+                    return None
+                cost = counter.count_text(render_source([unit]))
+                if charge + cost > ceiling:
+                    return None
+                if (
+                    link.relationship != RELATION_IMPORT_DECL
+                    and defs + 1 > policy.max_definitions
+                ):
+                    return None
+                added.append(unit)
+                proof_links.append(
+                    DependencyProofLink(
+                        path=link.target.path,
+                        digest=link.target.digest,
+                        start_line=link.target.start_line,
+                        end_line=link.target.end_line,
+                        relationship=link.relationship,
+                        depth=link.depth,
+                        reference_line=link.reference_line,
+                    )
+                )
+                covered_keys.add(key)
+                charge += cost
+                if link.relationship != RELATION_IMPORT_DECL:
+                    defs += 1
+        return added, tuple(proof_links), charge
 
     def _select_failure(
         self,
@@ -1469,9 +2050,33 @@ class ContextPacker:
         session.attempts += 1
         counter_state = _CounterState(self.token_counter)
         batch = self._cache.begin_batch() if self._cache is not None else None
+        coverage_enabled = self.context_config.dependency_coverage.enabled
+        # Enabled sessions always prove against the frozen open-time universe.
+        # Call-site filters may only reject emission, never manufacture uniqueness.
+        if coverage_enabled:
+            effective_paths = session.lookup_paths
+            effective_filter = session.read_filter
+            emission_filter = self._conjoined_read_filter(
+                session.read_filter, read_filter
+            )
+            if (
+                scan_paths is not None
+                and session.lookup_paths is not None
+                and not set(scan_paths).issubset(session.lookup_paths)
+            ):
+                return self._expand_failure(
+                    session,
+                    REASON_DEPENDENCY_UNAVAILABLE,
+                    "dependency_uncertain:scope_unavailable",
+                    None,
+                )
+        else:
+            effective_paths = scan_paths
+            effective_filter = read_filter
+            emission_filter = read_filter
         try:
             with self.repository.scan_retrieval_sources(
-                paths=scan_paths, read_filter=read_filter
+                paths=effective_paths, read_filter=effective_filter
             ) as scan:
                 catalog = PackingCatalog(
                     scan,
@@ -1500,13 +2105,72 @@ class ContextPacker:
                 delta_units, carry_ids, status = self._delta_for_target(
                     session, catalog, target, coverage, request
                 )
+                closure_units: list[SourceUnit] = []
+                proof_links: tuple[DependencyProofLink, ...] = ()
+                proof_charge = 0
+                if (
+                    coverage_enabled
+                    and request.kind in {"symbol", "range", "dependency"}
+                ):
+                    covered_units = [
+                        SourceUnit(
+                            path=item.path,
+                            start_line=item.start_line,
+                            end_line=item.end_line,
+                            digest=item.digest,
+                            kind=item.kind,
+                            text="",
+                        )
+                        for item in session.fragments.values()
+                    ]
+                    optional = self._optional_dependency_units(
+                        catalog=catalog,
+                        scan=scan,
+                        seed=target,
+                        covered=[*covered_units, *delta_units],
+                        selected_output=session.output_tokens,
+                    )
+                    if optional is None:
+                        return self._expand_failure(
+                            session,
+                            "dependency_limit:tokens",
+                            "expansion_dependency_closure",
+                            None,
+                        )
+                    closure_units, proof_links, proof_charge = optional
                 if status is not None:
-                    if status == "no_change":
+                    if status == "no_change" and not closure_units:
                         return self._no_change(session, target, envelope_view)
-                    if status == REASON_SOURCE_CHANGED:
+                    if status == "no_change" and closure_units:
+                        delta_units = list(closure_units)
+                        status = None
+                    elif status == REASON_SOURCE_CHANGED:
                         session.close()
                         return self._stale_result(session, envelope_view)
-                    return self._expand_failure(session, status, "target_overlap", None)
+                    elif status is not None:
+                        return self._expand_failure(session, status, "target_overlap", None)
+                elif closure_units:
+                    delta_units = [*delta_units, *closure_units]
+                if emission_filter is not None and any(
+                    not emission_filter(unit.path) for unit in delta_units
+                ):
+                    return self._expand_failure(
+                        session,
+                        REASON_DEPENDENCY_UNAVAILABLE,
+                        "dependency_uncertain:scope_unavailable",
+                        None,
+                    )
+                if (
+                    coverage_enabled
+                    and scan_paths is not None
+                    and any(unit.path not in scan_paths for unit in delta_units)
+                ):
+                    return self._expand_failure(
+                        session,
+                        REASON_DEPENDENCY_UNAVAILABLE,
+                        "dependency_uncertain:scope_unavailable",
+                        None,
+                    )
 
                 new_bytes = self._units_bytes(delta_units)
                 file_chars = dict(session.file_chars)
@@ -1579,6 +2243,20 @@ class ContextPacker:
                     )
                     for unit in delta_units
                 )
+                proof_kwargs: dict[str, Any] = {}
+                if self.context_config.dependency_coverage.enabled:
+                    policy = self.context_config.dependency_coverage
+                    proof_kwargs = {
+                        "analyzer_contract_version": ANALYZER_CONTRACT_VERSION,
+                        "dependency_max_depth": policy.max_depth,
+                        "dependency_max_definitions": policy.max_definitions,
+                        "dependency_max_tokens": policy.max_tokens,
+                        "seed_path": target.path,
+                        "seed_digest": target.digest,
+                        "seed_start_line": target.start_line,
+                        "seed_end_line": target.end_line,
+                        "dependency_links": proof_links,
+                    }
                 receipt = ExpansionDelivery(
                     receipt_id="pack-receipt:" + uuid.uuid4().hex,
                     target_kind=request.kind,
@@ -1597,6 +2275,7 @@ class ContextPacker:
                         for item in fragments
                     ),
                     edge_id=request.edge_id,
+                    **proof_kwargs,
                 )
                 for unit in delta_units:
                     session.add_coverage(
@@ -1613,6 +2292,8 @@ class ContextPacker:
                         )
                     )
                 session.record_receipt(receipt)
+                if proof_charge:
+                    session.note_dependency_charge(proof_charge)
                 session.cumulative_units += new_bytes
                 session.file_chars = file_chars
                 session.total_chars = sum(file_chars.values())
@@ -1690,8 +2371,13 @@ class ContextPacker:
 
         scope = self._session_scope(session)
         counter_state = _CounterState(self.token_counter)
+        # Delivery always rechecks against the frozen open-time read universe.
+        delivery_paths = session.lookup_paths
+        delivery_filter = session.read_filter
         try:
-            with self.repository.scan_retrieval_sources() as scan:
+            with self.repository.scan_retrieval_sources(
+                paths=delivery_paths, read_filter=delivery_filter
+            ) as scan:
                 catalog = PackingCatalog(scan, allowed_paths=scope)
                 drift = self._session_drift(session, scan, catalog)
                 if drift is not None:
@@ -1712,6 +2398,20 @@ class ContextPacker:
                 if delta_units is None or carry_units is None:
                     session.close()
                     return self._stale_result(session, envelope_view)
+                if receipt.analyzer_contract_version is not None:
+                    proof_ok = self._revalidate_dependency_proof(
+                        session, receipt, catalog, scan
+                    )
+                    if proof_ok is False:
+                        session.close()
+                        return self._stale_result(session, envelope_view)
+                    if proof_ok is None:
+                        return self._expand_failure(
+                            session,
+                            REASON_DEPENDENCY_UNAVAILABLE,
+                            "dependency_proof_invalid",
+                            None,
+                        )
                 units = [*carry_units, *delta_units]
                 assembly = self._assemble(
                     system=session.task.system_instructions,
@@ -1989,12 +2689,196 @@ class ContextPacker:
                 return self._expand_failure(
                     session, REASON_DEPENDENCY_UNAVAILABLE, "edge_unresolved", None
                 )
+        if self.context_config.dependency_coverage.enabled:
+            resolved = self._analyzer_dependency_edge_target(
+                session, catalog, scan, edge
+            )
+            if isinstance(resolved, PackResult):
+                return resolved
+            return resolved
         unit = catalog.first_definition_for_path(edge.related_path, ())
         if unit is None:
             return self._expand_failure(
                 session, REASON_DEPENDENCY_UNAVAILABLE, "related_unit_unavailable", None
             )
         return unit
+
+    def _analyzer_dependency_edge_target(
+        self,
+        session: PackingSession,
+        catalog: PackingCatalog,
+        scan: SourceScan,
+        edge: Any,
+    ) -> SourceUnit | PackResult:
+        """Resolve a file-edge expansion to exactly one analyzer-backed target."""
+
+        # Require a recorded origin fragment on the anchor path/revision.
+        origins = [
+            fragment
+            for fragment in session.fragments.values()
+            if fragment.path == edge.anchor_path and fragment.digest == edge.anchor_digest
+        ]
+        if not origins:
+            return self._expand_failure(
+                session,
+                REASON_DEPENDENCY_UNAVAILABLE,
+                "dependency_uncertain:unanchored_edge",
+                None,
+            )
+        if edge.direction != "import":
+            return self._expand_failure(
+                session,
+                REASON_DEPENDENCY_UNAVAILABLE,
+                "dependency_uncertain:reverse_edge",
+                None,
+            )
+        analyzer = DependencyAnalyzer(catalog, self._proof_graph(scan))
+        matches: list[SourceUnit] = []
+        for origin in origins:
+            discovery = analyzer.discover(
+                [
+                    DependencyRef(
+                        path=origin.path,
+                        digest=origin.digest,
+                        start_line=origin.start_line,
+                        end_line=origin.end_line,
+                    )
+                ],
+                covered={
+                    (item.path, item.digest, item.start_line, item.end_line)
+                    for item in session.fragments.values()
+                },
+                max_depth=self.context_config.dependency_coverage.max_depth,
+            )
+            for group in discovery.groups:
+                for link in group.links:
+                    if link.target is None or link.relationship == RELATION_IMPORT_DECL:
+                        continue
+                    if link.target.path != edge.related_path:
+                        continue
+                    if link.target.digest != edge.related_digest:
+                        continue
+                    unit = self._unit_from_dependency_ref(
+                        catalog, link.target, relationship=link.relationship
+                    )
+                    if unit is not None:
+                        matches.append(unit)
+        # Deduplicate exact refs.
+        unique: dict[tuple[str, str, int, int], SourceUnit] = {
+            (item.path, item.digest, item.start_line, item.end_line): item
+            for item in matches
+        }
+        if len(unique) != 1:
+            return self._expand_failure(
+                session,
+                REASON_DEPENDENCY_UNAVAILABLE,
+                "dependency_uncertain:ambiguous_or_empty_edge",
+                None,
+            )
+        return next(iter(unique.values()))
+
+    @staticmethod
+    def _conjoined_read_filter(original, additional):
+        """Combine open-time and call-site filters; either may reject a path."""
+
+        if original is None and additional is None:
+            return None
+        if original is None:
+            return additional
+        if additional is None:
+            return original
+
+        def combined(path: str) -> bool:
+            return bool(original(path)) and bool(additional(path))
+
+        return combined
+
+    def _revalidate_dependency_proof(
+        self,
+        session: PackingSession,
+        receipt: ExpansionDelivery,
+        catalog: PackingCatalog,
+        scan: SourceScan,
+    ) -> bool | None:
+        """Re-prove receipt dependency links against the original checked universe.
+
+        Returns True when proof still holds, False when revisions drifted
+        (stale), and None when uniqueness/relationship proof failed without a
+        digest mismatch on the rematerialized refs.
+        """
+
+        del session  # Policy and seed are frozen on the receipt.
+        if receipt.analyzer_contract_version != ANALYZER_CONTRACT_VERSION:
+            log.debug(
+                "[Context.packer] dependency_proof refuse=contract_version"
+            )
+            return None
+        policy = self.context_config.dependency_coverage
+        if (
+            receipt.dependency_max_depth != policy.max_depth
+            or receipt.dependency_max_definitions != policy.max_definitions
+            or receipt.dependency_max_tokens != policy.max_tokens
+        ):
+            log.debug("[Context.packer] dependency_proof refuse=policy_drift")
+            return None
+        if (
+            receipt.seed_path is None
+            or receipt.seed_digest is None
+            or receipt.seed_start_line is None
+            or receipt.seed_end_line is None
+        ):
+            return None
+        seed_snap = catalog.lookup_snapshot(receipt.seed_path)
+        if seed_snap is None:
+            return False
+        if seed_snap.digest != receipt.seed_digest:
+            return False
+        if not receipt.dependency_links:
+            return True
+        analyzer = DependencyAnalyzer(catalog, self._proof_graph(scan))
+        discovery = analyzer.discover(
+            [
+                DependencyRef(
+                    path=receipt.seed_path,
+                    digest=receipt.seed_digest,
+                    start_line=receipt.seed_start_line,
+                    end_line=receipt.seed_end_line,
+                )
+            ],
+            covered=set(),
+            max_depth=policy.max_depth,
+        )
+        proven = {
+            (
+                link.target.path,
+                link.target.digest,
+                link.target.start_line,
+                link.target.end_line,
+                link.relationship,
+            )
+            for group in discovery.groups
+            for link in group.links
+            if link.target is not None
+        }
+        for expected in receipt.dependency_links:
+            key = (
+                expected.path,
+                expected.digest,
+                expected.start_line,
+                expected.end_line,
+                expected.relationship,
+            )
+            if key not in proven:
+                # Target still present with matching bytes but no longer unique.
+                target_snap = catalog.lookup_snapshot(expected.path)
+                if target_snap is None or target_snap.digest != expected.digest:
+                    return False
+                log.debug(
+                    "[Context.packer] dependency_proof refuse=relationship path=%s",
+                    expected.path,
+                )
+                return None
+        return True
 
     def _delta_for_target(
         self,

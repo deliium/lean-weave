@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lean_weave.config.models import ContextConfig, PackingConfig
+from lean_weave.config.models import ContextConfig, DependencyCoverageConfig, PackingConfig
 from lean_weave.context.packer import ContextPacker
 from lean_weave.context.packing_models import PackRequest
 from lean_weave.context.repository import Repository
@@ -42,10 +42,13 @@ def make_packer(
     model: str = "deepseek-flash",
     thinking: bool = False,
     visited_entries_max: int | None = None,
+    dependency_coverage: DependencyCoverageConfig | None = None,
 ) -> ContextPacker:
-    overrides = {}
+    overrides: dict = {}
     if visited_entries_max is not None:
         overrides["visited_entries_max"] = visited_entries_max
+    if dependency_coverage is not None:
+        overrides["dependency_coverage"] = dependency_coverage
     context = ContextConfig(packing=config or packing(), **overrides)
     repository = Repository(project, context, strict_source=True)
     retriever = ContextRetriever(repository, load_graph=load_graph)

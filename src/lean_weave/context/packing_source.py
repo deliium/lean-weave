@@ -21,6 +21,7 @@ from lean_weave.context.packing_models import (
 from lean_weave.context.policy import is_python
 from lean_weave.context.python_index import (
     DefinitionFact,
+    PythonFacts,
     extract_python_facts,
     module_name_for_path,
 )
@@ -86,7 +87,12 @@ class PackingCatalog:
             for item in scan.snapshots
             if allowed_paths is None or item.path in allowed_paths
         }
+        # Lookup universe may be wider than emit scope (output_paths filter).
+        self.lookup_snapshots: dict[str, FileSnapshot] = {
+            item.path: item for item in scan.snapshots
+        }
         self._facts: dict[str, tuple[DefinitionFact, ...]] = {}
+        self._python_facts: dict[str, PythonFacts | None] = {}
         self._spans: dict[str, tuple[SourceSpan, ...]] = {}
         self._fact_cache = fact_cache
         self._span_cache = span_cache
@@ -95,17 +101,24 @@ class PackingCatalog:
     def snapshot(self, path: str) -> FileSnapshot | None:
         return self.snapshots.get(path)
 
+    def lookup_snapshot(self, path: str) -> FileSnapshot | None:
+        """Checked-scan snapshot for proof lookup (not limited by emit scope)."""
+
+        return self.lookup_snapshots.get(path)
+
     def paths(self) -> tuple[str, ...]:
         return tuple(self.snapshots)
 
     def python_paths(self) -> tuple[str, ...]:
         return tuple(path for path in self.snapshots if is_python(path))
 
-    def facts(self, path: str) -> tuple[DefinitionFact, ...]:
-        if path not in self._facts:
-            snapshot = self.snapshots.get(path)
+    def python_facts(self, path: str) -> PythonFacts | None:
+        """Full AST facts including status; truncated is not proof of absence."""
+
+        if path not in self._python_facts:
+            snapshot = self.lookup_snapshots.get(path) or self.snapshots.get(path)
             if snapshot is None or not is_python(path):
-                self._facts[path] = ()
+                self._python_facts[path] = None
             else:
                 facts = None
                 if self._fact_cache is not None:
@@ -116,9 +129,16 @@ class PackingCatalog:
                     facts = extract_python_facts(snapshot)
                     if self._fact_cache is not None and self._batch is not None:
                         self._fact_cache.publish(snapshot, facts, batch=self._batch)
-                self._facts[path] = (
-                    facts.definitions if facts.status in {"ok", "ok_truncated"} else ()
-                )
+                self._python_facts[path] = facts
+        return self._python_facts[path]
+
+    def facts(self, path: str) -> tuple[DefinitionFact, ...]:
+        if path not in self._facts:
+            facts = self.python_facts(path)
+            if facts is None or facts.status not in {"ok", "ok_truncated"}:
+                self._facts[path] = ()
+            else:
+                self._facts[path] = facts.definitions
         return self._facts[path]
 
     def spans(self, path: str) -> tuple[SourceSpan, ...]:
@@ -172,6 +192,76 @@ class PackingCatalog:
             symbol=fact.local_name,
             reasons=reasons,
             covered_selectors=(qualified_name,),
+        )
+        return unit, None
+
+    def import_unit(
+        self,
+        path: str,
+        start: int,
+        end: int,
+        *,
+        reasons: tuple[str, ...] = ("import_declaration",),
+    ) -> tuple[SourceUnit | None, str | None]:
+        """Exact original import statement slice — never structural promotion.
+
+        Semicolon siblings on the same line are refused rather than reconstructed.
+        """
+
+        snapshot = self.snapshots.get(path)
+        if snapshot is None:
+            return None, "required_source_unavailable"
+        if not is_python(path):
+            return None, "not_applicable"
+        lines = iter_lines(snapshot.text)
+        if start < 1 or end > len(lines) or end < start:
+            return None, "invalid_structural_range"
+        # Refuse semicolon co-statements that would emit unrelated code.
+        for index in range(start, end + 1):
+            raw = lines[index - 1]
+            if ";" in raw:
+                before, _, after = raw.partition(";")
+                left = before.strip()
+                right = after.strip()
+                importish = left.startswith("import ") or left.startswith("from ")
+                if importish and right and not (
+                    right.startswith("import ") or right.startswith("from ")
+                ):
+                    log.debug(
+                        "[PackingSource.import_unit] path=%s refuse=semicolon_sibling",
+                        path,
+                    )
+                    return None, "dependency_uncertain:semicolon_sibling"
+        try:
+            tree = ast.parse(snapshot.text, filename=path)
+        except (SyntaxError, ValueError, MemoryError, RecursionError):
+            return None, "analysis_unavailable"
+        matched: ast.stmt | None = None
+        for stmt in getattr(tree, "body", ()):
+            if not isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                continue
+            stmt_start = int(stmt.lineno)
+            stmt_end = int(getattr(stmt, "end_lineno", None) or stmt.lineno)
+            if stmt_start == start and stmt_end == end:
+                matched = stmt
+                break
+        if matched is None:
+            return None, "required_source_unavailable"
+        unit = _unit_from_span(
+            snapshot,
+            start=start,
+            end=end,
+            kind="range",
+            symbol=None,
+            reasons=reasons,
+            covered_selectors=(f"{path}:{start}-{end}",),
+        )
+        log.debug(
+            "[PackingSource.import_unit] path=%s start=%s end=%s chars=%s",
+            path,
+            start,
+            end,
+            unit.chars,
         )
         return unit, None
 

@@ -69,14 +69,22 @@ context:
 
 The selected mode is frozen into the feature authority digest. Resuming a V2
 feature with a different mode, packing/retrieval/cache setting, read policy, or
-model cap is refused as authority drift before another dispatch. **Rollback is
-choosing `v1` for new features**; do not swap the mode on an active V2 feature.
+model cap is refused as authority drift before another dispatch. When
+`context.dependency_coverage.enabled` is true, that subtree (including the
+analyzer contract version) is part of the same digest; when disabled the key
+is absent so pre-existing unchanged V2 checkpoints keep their digest.
+**Rollback is choosing `v1` for new features**; do not swap the mode on an
+active V2 feature.
 
 Expansion is only through the existing `read_range` / `read_symbol` tools.
 Accepted fragments appear in the next freshly assembled source block; duplicate
-or fully covered requests return `no_change`. Confirmed owned edits rebuild
-current source without resetting expansion, source, call, or token caps. Stale
-or unproven source is refused rather than replaying an old block.
+or fully covered requests return `no_change`. Only the explicit read root is
+recorded as a forced root—dependency closure fragments stay attributed and are
+recomputed on the next guarded round. Confirmed owned edits rebuild current
+source without resetting expansion, source, call, or token caps. Stale or
+unproven source is refused rather than replaying an old block. Dependency
+budget failures map to the existing `budget_exhausted` / `oversized` statuses
+and do not fall back to V1.
 
 V2 context is checkout-local. It does not enable peer cache reuse, implicit
 index/cache maintenance, new write authority, or background work. Missing or

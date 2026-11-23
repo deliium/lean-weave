@@ -104,6 +104,7 @@ PackRequest
   → ContextRetriever (strict scan + optional checked graph)
   → PackingCatalog (operation-local snapshots, AST structural spans)
   → ContextPacker (required/optional selection, dedup, independent caps)
+      ↳ optional DependencyAnalyzer (context/dependency_coverage.py)
   → PackedContextV2 (fragments, map rows, revisions, messages, metrics)
   → PackingSession (task-local revisions/coverage/receipts; no bodies)
   → prepare_packed_request (explicit guarded LLMRequest)
@@ -118,13 +119,19 @@ Design constraints:
   references instead of refreshing them.
 - Every emitted fragment is a complete contiguous canonical slice. Required
   evidence is never clipped or silently replaced by cheaper evidence.
+- Opt-in `context.dependency_coverage` (disabled by default) resolves verified
+  use-site imports/definitions during L1 packing and L2 expansion under
+  independent depth/definition/token sub-caps. Ambiguity is reported; targets
+  are never invented. Sessions freeze the open-time read universe so narrower
+  expand filters cannot manufacture uniqueness; delivery re-proves receipt
+  relationships against that universe. Proof graphs are never cached.
 - Local section/request counts are separate from the gateway's reservation and
   API-reported settlement. The default estimator is conservative bytes; an
   exact adapter must be explicitly injected and must support the effective wire.
 - The DeepSeek adapter attaches a local guard for the counted wire shape. The
   gateway validates it before client creation, booking, or transport.
 - No index maintenance, checkout writes, model calls, embeddings, summaries, or
-  workflow orchestrator changes are involved.
+  new orchestrator dependency are involved.
 
 ## Workflow context integration (V2)
 
@@ -279,8 +286,11 @@ with fixture/condition digests, per-metric coverage, declared schedules and
 version-2 regression policies. Retrieval quality is reported separately by
 split and K, and cache/index updates are measured without provider calls.
 The current assessment is in [v2-readiness.md](v2-readiness.md): V1 remains the
-default; V2 is not release-ready because the retrieval holdout split regresses
-required-dependency coverage. Live DeepSeek savings remain unvalidated.
+default; V2 is not release-certified. Historical holdout required-dependency
+regression remains unchanged evidence and must not be used for tuning; opt-in
+dependency coverage is validated on an independent development set only, and a
+new blind holdout is required before any generalization claim. Live DeepSeek
+savings remain unvalidated.
 
 ## MVP 1 exclusions
 

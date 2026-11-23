@@ -333,6 +333,51 @@ class PackMetrics(_Model):
     remaining_expansions: int = Field(default=0, ge=0)
 
 
+class DependencyCoverageSummary(_Model):
+    """Opt-in dependency closure counters; absent when the policy is disabled."""
+
+    enabled: bool = False
+    status: Literal["disabled", "complete", "incomplete", "refused"] = "disabled"
+    estimator: Literal["conservative_estimate"] = "conservative_estimate"
+    max_depth: int = Field(default=0, ge=0)
+    max_definitions: int = Field(default=0, ge=0)
+    max_tokens: int = Field(default=0, ge=0)
+    effective_token_ceiling: int = Field(default=0, ge=0)
+    definitions_added: int = Field(default=0, ge=0)
+    imports_added: int = Field(default=0, ge=0)
+    charged_tokens: int = Field(default=0, ge=0)
+    coverage_complete: bool = True
+
+
+class DependencyEvidenceRow(_Model):
+    origin_path: str
+    origin_start_line: int = Field(ge=1)
+    origin_end_line: int = Field(ge=1)
+    origin_digest: str
+    target_path: str | None = None
+    target_start_line: int | None = Field(default=None, ge=1)
+    target_end_line: int | None = Field(default=None, ge=1)
+    target_digest: str | None = None
+    reference_line: int = Field(ge=1)
+    relationship: str
+    reason: str
+    depth: int = Field(ge=0)
+    estimated_unit_cost: int = Field(default=0, ge=0)
+    newly_charged: bool = False
+
+
+class DependencyIssueRow(_Model):
+    origin_path: str
+    origin_start_line: int = Field(ge=1)
+    origin_end_line: int = Field(ge=1)
+    origin_digest: str
+    reason: str
+    target_path: str | None = None
+    target_start_line: int | None = Field(default=None, ge=1)
+    target_end_line: int | None = Field(default=None, ge=1)
+    target_digest: str | None = None
+
+
 class PackedContextV2(_Model):
     """Versioned pack metadata plus the exact prompt it was counted from."""
 
@@ -358,6 +403,10 @@ class PackedContextV2(_Model):
     degraded_reasons: tuple[str, ...] = ()
     messages: tuple[dict[str, Any], ...] = ()
     metrics: PackMetrics = Field(default_factory=PackMetrics)
+    # Opt-in dependency coverage projection (defaults keep legacy dumps stable).
+    dependency_coverage: DependencyCoverageSummary | None = None
+    dependency_evidence: tuple[DependencyEvidenceRow, ...] = ()
+    dependency_issues: tuple[DependencyIssueRow, ...] = ()
 
     @property
     def dispatchable(self) -> bool:
@@ -429,8 +478,26 @@ class ExpansionRequest(_Model):
         return self
 
 
+class DependencyProofLink(_Model):
+    """Exact resolved dependency relationship frozen into an expansion receipt."""
+
+    path: str
+    digest: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    relationship: str
+    depth: int = Field(ge=0)
+    reference_line: int = Field(ge=1)
+
+
 class ExpansionDelivery(_Model):
-    """Private session-owned receipt for one verified L2 delta."""
+    """Private session-owned receipt for one verified L2 delta.
+
+    When dependency coverage is enabled, receipts also bind the analyzer contract,
+    policy caps, originating seed, and exact resolved relationships so delivery
+    can re-prove against the original checked read universe even when fragment
+    digests are unchanged.
+    """
 
     receipt_id: str
     target_kind: Literal["symbol", "range", "dependency"]
@@ -439,6 +506,16 @@ class ExpansionDelivery(_Model):
     envelope_fingerprint: str
     source_refs: tuple[FragmentRef, ...] = ()
     edge_id: str | None = None
+    # Opt-in dependency proof binding (absent/empty when coverage is disabled).
+    analyzer_contract_version: int | None = None
+    dependency_max_depth: int | None = None
+    dependency_max_definitions: int | None = None
+    dependency_max_tokens: int | None = None
+    seed_path: str | None = None
+    seed_digest: str | None = None
+    seed_start_line: int | None = Field(default=None, ge=1)
+    seed_end_line: int | None = Field(default=None, ge=1)
+    dependency_links: tuple[DependencyProofLink, ...] = ()
 
 
 class PackResult(_Model):

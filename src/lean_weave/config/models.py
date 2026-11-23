@@ -155,6 +155,20 @@ class ContextCacheConfig(ConfigModel):
     max_entries: int = Field(default=4096, ge=1, le=16_384)
 
 
+class DependencyCoverageConfig(ConfigModel):
+    """Opt-in bounded dependency closure during L1 packing.
+
+    Disabled by default. ``max_tokens`` is an independent sub-cap; the effective
+    ceiling is also bounded by ``packing.source_tokens`` and remaining total
+    budget after output reservation. Zero is a real bound, not a disable flag.
+    """
+
+    enabled: bool = False
+    max_depth: int = Field(default=2, ge=0, le=4)
+    max_definitions: int = Field(default=8, ge=0, le=32)
+    max_tokens: int = Field(default=1024, ge=0, le=8192)
+
+
 WorkflowContextMode = Literal["v1", "v2", "v2-with-v1-fallback"]
 
 
@@ -180,6 +194,9 @@ class ContextConfig(ConfigModel):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     packing: PackingConfig = Field(default_factory=PackingConfig)
     cache: ContextCacheConfig = Field(default_factory=ContextCacheConfig)
+    dependency_coverage: DependencyCoverageConfig = Field(
+        default_factory=DependencyCoverageConfig
+    )
 
     @field_validator("exclusions")
     @classmethod

@@ -5,8 +5,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from lean_weave.context.packing_models import ExpansionRequest, SymbolSelector, edge_id_for
+from lean_weave.code_index import CodeIndex
+from lean_weave.config.models import ContextConfig, DependencyCoverageConfig
+from lean_weave.context.packing_models import (
+    DependencyProofLink,
+    ExpansionRequest,
+    SymbolSelector,
+    edge_id_for,
+)
 from lean_weave.errors import CodeIndexError, InvalidContextRequest
+from lean_weave.repository_map import RepositoryMap
 
 from .packing_support import graph_for, make_packer, packing, request
 
@@ -486,3 +494,295 @@ def test_delivery_after_source_mutation_is_stale(basic_repo: Path):
     )
     assert stale.status == "stale_reference"
     assert not session.open
+
+
+def _dependency_expand_fixture(tmp_path: Path):
+    root = tmp_path / "repo"
+    cache = tmp_path / "cache"
+    cache.mkdir(mode=0o700)
+    write(root, "models/__init__.py", "")
+    write(
+        root,
+        "models/widget.py",
+        "class HarborWidget:\n    def spin(self):\n        return 1\n",
+    )
+    write(root, "service/__init__.py", "")
+    write(
+        root,
+        "service/runner.py",
+        "from models.widget import HarborWidget\n\n"
+        "def keep():\n    return 0\n\n"
+        "def activate(item: HarborWidget):\n    return item.spin()\n",
+    )
+    index = CodeIndex(root, cache_base=cache, context_config=ContextConfig())
+    index.build()
+    service = RepositoryMap(index)
+
+    def load_graph(scan):
+        return service.graph_for_retrieval_scan(scan)
+
+    packer = make_packer(
+        root,
+        load_graph=load_graph,
+        dependency_coverage=DependencyCoverageConfig(enabled=True, max_depth=1),
+        # Unrelated query + no map rows: initial pack is only the required keep().
+        config=packing(map_tokens=0),
+    )
+    opened, session = packer.open_task(
+        request(
+            query="zzzz_unrelated_token",
+            required_symbols=(
+                SymbolSelector(
+                    path="service/runner.py",
+                    qualified_name="service.runner.keep",
+                ),
+            ),
+        )
+    )
+    assert opened.status == "ready" and session is not None
+    digest = session.revisions["service/runner.py"]
+    expanded = packer.expand(
+        session,
+        ExpansionRequest(
+            kind="symbol",
+            path="service/runner.py",
+            expected_digest=digest,
+            qualified_name="service.runner.activate",
+        ),
+    )
+    return root, packer, session, expanded
+
+
+def test_enabled_expansion_binds_dependency_proof_and_delivery_rechecks(tmp_path: Path):
+    _root, packer, session, expanded = _dependency_expand_fixture(tmp_path)
+    assert expanded.status == "ready" and expanded.receipt_id is not None
+    receipt = session.receipts[expanded.receipt_id]
+    assert receipt.analyzer_contract_version == 1
+    assert receipt.seed_path == "service/runner.py"
+    assert receipt.dependency_links
+    assert any(
+        link.relationship == "imported_definition" and link.path == "models/widget.py"
+        for link in receipt.dependency_links
+    )
+    assert any(
+        link.relationship == "import_declaration" and link.path == "service/runner.py"
+        for link in receipt.dependency_links
+    )
+    assert session.dependency_definitions_added >= 1
+    assert session.dependency_charged_tokens > 0
+    delivery = packer.prepare_expansion_delivery(
+        session, expanded.receipt_id, list(receipt.carry_forward_ids)
+    )
+    assert delivery.status == "ready"
+
+    # Rematerialize would still succeed for original refs; forged relationship must refuse.
+    forged = receipt.model_copy(
+        update={
+            "dependency_links": tuple(
+                DependencyProofLink(
+                    path=link.path,
+                    digest=link.digest,
+                    start_line=link.start_line,
+                    end_line=link.end_line,
+                    relationship="forged_relationship",
+                    depth=link.depth,
+                    reference_line=link.reference_line,
+                )
+                for link in receipt.dependency_links
+            )
+        }
+    )
+    session.receipts[receipt.receipt_id] = forged
+    refused = packer.prepare_expansion_delivery(
+        session, expanded.receipt_id, list(receipt.carry_forward_ids)
+    )
+    assert refused.status == "insufficient_context"
+    assert "dependency_unavailable" in refused.reason_codes
+
+
+def test_delivery_rejects_when_unique_dependency_becomes_ambiguous(tmp_path: Path):
+    root, packer, session, expanded = _dependency_expand_fixture(tmp_path)
+    assert expanded.status == "ready" and expanded.receipt_id is not None
+    receipt = session.receipts[expanded.receipt_id]
+    assert receipt.dependency_links
+    # Duplicate top-level definition: target digest changes → stale via rematerialize
+    # or proof path; either way delivery must not dispatch.
+    write(
+        root,
+        "models/widget.py",
+        "class HarborWidget:\n    def spin(self):\n        return 1\n\n"
+        "class HarborWidget:\n    def spin(self):\n        return 0\n",
+    )
+    outcome = packer.prepare_expansion_delivery(
+        session, expanded.receipt_id, list(receipt.carry_forward_ids)
+    )
+    assert outcome.status in {"stale_reference", "insufficient_context"}
+    assert outcome.pack is None or not outcome.pack.messages
+
+
+def test_disabled_receipt_omits_dependency_proof_fields(basic_repo: Path):
+    packer = make_packer(basic_repo)
+    opened, session = packer.open_task(request())
+    assert session is not None
+    digest = session.revisions["pkg/core.py"]
+    expanded = packer.expand(
+        session,
+        ExpansionRequest(
+            kind="symbol",
+            path="pkg/core.py",
+            expected_digest=digest,
+            qualified_name="pkg.core.Widget",
+        ),
+    )
+    assert expanded.status == "ready" and expanded.receipt_id is not None
+    receipt = session.receipts[expanded.receipt_id]
+    assert receipt.analyzer_contract_version is None
+    assert receipt.dependency_links == ()
+    assert receipt.seed_path is None
+    assert session.dependency_definitions_added == 0
+
+
+def test_enabled_reverse_dependency_edge_is_unavailable(project: Path):
+    write(project, "pkg/core.py", "from pkg import other\n\ndef anchor():\n    return 0\n")
+    write(project, "pkg/other.py", "def related():\n    return 1\n")
+
+    def load_graph(scan):
+        return graph_for(scan)
+
+    packer = make_packer(
+        project,
+        load_graph=load_graph,
+        dependency_coverage=DependencyCoverageConfig(enabled=True, max_depth=1),
+        config=packing(source_tokens=250, map_tokens=0),
+    )
+    result, session = packer.open_task(request(query="anchor"))
+    assert session is not None
+    reverse_edge = next(
+        item
+        for item in session.relations
+        if item.direction == "reverse" and item.related_path == "pkg/core.py"
+    )
+    refused = packer.expand(
+        session, ExpansionRequest(kind="dependency", edge_id=reverse_edge.edge_id)
+    )
+    assert refused.status == "insufficient_context"
+    assert "dependency_unavailable" in refused.reason_codes
+
+
+def test_already_covered_root_still_delivers_new_dependency_closure(tmp_path: Path):
+    root = tmp_path / "repo"
+    cache = tmp_path / "cache"
+    cache.mkdir(mode=0o700)
+    write(root, "models/__init__.py", "")
+    write(
+        root,
+        "models/widget.py",
+        "class HarborWidget:\n    def spin(self):\n        return 1\n",
+    )
+    write(root, "service/__init__.py", "")
+    write(
+        root,
+        "service/runner.py",
+        "from models.widget import HarborWidget\n\n"
+        "def activate(item: HarborWidget):\n    return item.spin()\n",
+    )
+    index = CodeIndex(root, cache_base=cache, context_config=ContextConfig())
+    index.build()
+    service = RepositoryMap(index)
+    packer = make_packer(
+        root,
+        load_graph=lambda scan: service.graph_for_retrieval_scan(scan),
+        dependency_coverage=DependencyCoverageConfig(enabled=True, max_depth=0),
+        config=packing(map_tokens=0),
+    )
+    opened, session = packer.open_task(
+        request(
+            query="zzzz",
+            required_symbols=(
+                SymbolSelector(
+                    path="service/runner.py",
+                    qualified_name="service.runner.activate",
+                ),
+            ),
+        )
+    )
+    assert opened.status == "ready" and session is not None
+    assert "models/widget.py" not in {ref.path for ref in session.fragments.values()}
+    # Raise depth so a later expand can admit the previously blocked definition.
+    deeper = DependencyCoverageConfig(enabled=True, max_depth=1)
+    packer.context_config = packer.context_config.model_copy(
+        update={"dependency_coverage": deeper}
+    )
+    packer.repository.config = packer.context_config
+    digest = session.revisions["service/runner.py"]
+    expanded = packer.expand(
+        session,
+        ExpansionRequest(
+            kind="symbol",
+            path="service/runner.py",
+            expected_digest=digest,
+            qualified_name="service.runner.activate",
+        ),
+    )
+    assert expanded.status == "ready" and expanded.receipt_id is not None
+    paths = {item.path for item in expanded.pack.fragments}
+    assert "models/widget.py" in paths
+    receipt = session.receipts[expanded.receipt_id]
+    assert any(
+        link.relationship == "imported_definition" and link.path == "models/widget.py"
+        for link in receipt.dependency_links
+    )
+
+
+def test_narrower_expand_filter_cannot_hide_required_dependency(tmp_path: Path):
+    root = tmp_path / "repo"
+    cache = tmp_path / "cache"
+    cache.mkdir(mode=0o700)
+    write(root, "models/__init__.py", "")
+    write(
+        root,
+        "models/widget.py",
+        "class HarborWidget:\n    def spin(self):\n        return 1\n",
+    )
+    write(root, "service/__init__.py", "")
+    write(
+        root,
+        "service/runner.py",
+        "from models.widget import HarborWidget\n\n"
+        "def keep():\n    return 0\n\n"
+        "def activate(item: HarborWidget):\n    return item.spin()\n",
+    )
+    index = CodeIndex(root, cache_base=cache, context_config=ContextConfig())
+    index.build()
+    service = RepositoryMap(index)
+    packer = make_packer(
+        root,
+        load_graph=lambda scan: service.graph_for_retrieval_scan(scan),
+        dependency_coverage=DependencyCoverageConfig(enabled=True, max_depth=1),
+        config=packing(map_tokens=0),
+    )
+    opened, session = packer.open_task(
+        request(
+            query="zzzz_unrelated_token",
+            required_symbols=(
+                SymbolSelector(
+                    path="service/runner.py",
+                    qualified_name="service.runner.keep",
+                ),
+            ),
+        )
+    )
+    assert opened.status == "ready" and session is not None
+    digest = session.revisions["service/runner.py"]
+    refused = packer.expand(
+        session,
+        ExpansionRequest(
+            kind="symbol",
+            path="service/runner.py",
+            expected_digest=digest,
+            qualified_name="service.runner.activate",
+        ),
+        read_filter=lambda path: path != "models/widget.py",
+    )
+    assert refused.status == "insufficient_context"
+    assert "dependency_unavailable" in refused.reason_codes

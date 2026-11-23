@@ -1,0 +1,1447 @@
+{
+  "aggregates": {
+    "v1": {
+      "cases": 9,
+      "coverage_cases": 5,
+      "dependency_attributed_tokens_ready_sum": 1229,
+      "expansion_frequency": null,
+      "forbidden_emissions_total": 1,
+      "missing_dependency_total": 7,
+      "recall_micro": 0.5,
+      "unready_cases": 1,
+      "wire_input_tokens_ready_sum": 15922,
+      "wire_total_tokens_ready_sum": 24114
+    },
+    "v2": {
+      "cases": 9,
+      "coverage_cases": 5,
+      "dependency_attributed_tokens_ready_sum": 1506,
+      "expansion_frequency": 0.0,
+      "forbidden_emissions_total": 5,
+      "missing_dependency_total": 6,
+      "recall_micro": 0.5714285714285714,
+      "unready_cases": 1,
+      "wire_input_tokens_ready_sum": 7552,
+      "wire_total_tokens_ready_sum": 15744
+    }
+  },
+  "arms": [
+    "v1",
+    "v2"
+  ],
+  "baseline_revision": "91fc0724e5eecc6af0fa519c50702b977b4bdaf9",
+  "cases": [
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "imported_class_call_annotation",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:3b45d750407671639de306db924e87954e5adcc710de7668d98d8c1569fbd840",
+          "end_line": 5,
+          "kind": "range",
+          "path": "models/widget.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:6b4495980b29385c80ee01bbdec4aadfdfabd9e9a8b5d4ba5af553b719b59ded",
+          "end_line": 5,
+          "kind": "range",
+          "path": "service/runner.py",
+          "start_line": 4
+        }
+      ],
+      "dependency_attributed_tokens": 216,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 1,
+      "must_cover_hits": 1,
+      "must_cover_misses": 1,
+      "native_input_tokens": 741,
+      "native_output_tokens": null,
+      "native_total_tokens": 741,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "models/widget.py",
+        "service/runner.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 2143,
+      "wire_total_tokens": 3167
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v2",
+      "case_id": "imported_class_call_annotation",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:6b4495980b29385c80ee01bbdec4aadfdfabd9e9a8b5d4ba5af553b719b59ded",
+          "end_line": 5,
+          "kind": "definition",
+          "path": "service/runner.py",
+          "start_line": 4
+        },
+        {
+          "digest": "sha256:3b45d750407671639de306db924e87954e5adcc710de7668d98d8c1569fbd840",
+          "end_line": 5,
+          "kind": "definition",
+          "path": "models/widget.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:b18f3b8776c0c4173fb4787cd8ecee00dda7954ce290d4984d76c97d0942e040",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "service/noise.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 222,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 1,
+      "missing_dependency_count": 1,
+      "must_cover_hits": 1,
+      "must_cover_misses": 1,
+      "native_input_tokens": 1196,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 2220,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "service/runner.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1143,
+      "wire_total_tokens": 2167
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "aliased_and_unused_imports",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:9c7d2dc0c364184d9398982156708d3cb3a1a50a50dc6d45d1a94230f12efa63",
+          "end_line": 7,
+          "kind": "range",
+          "path": "studio/paint.py",
+          "start_line": 6
+        },
+        {
+          "digest": "sha256:77e1f46cb56b657571c99053c22aff425e2439233bdc80afb977cb715b48b13d",
+          "end_line": 2,
+          "kind": "range",
+          "path": "tools/lantern.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:a12145d4f8012a1cd655939c0981719cde5acb919afb27548b0f1b2384443c10",
+          "end_line": 2,
+          "kind": "range",
+          "path": "tools/mesa.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:63f3bf3e4cfb1edf08311fe599ca685bda7021127968fe4d4c2936fc24c4257c",
+          "end_line": 2,
+          "kind": "range",
+          "path": "tools/unused.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 274,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 1,
+      "missing_dependency_count": 2,
+      "must_cover_hits": 2,
+      "must_cover_misses": 2,
+      "native_input_tokens": 929,
+      "native_output_tokens": null,
+      "native_total_tokens": 929,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "studio/paint.py",
+        "tools/lantern.py",
+        "tools/mesa.py",
+        "tools/unused.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 2706,
+      "wire_total_tokens": 3730
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v2",
+      "case_id": "aliased_and_unused_imports",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:9c7d2dc0c364184d9398982156708d3cb3a1a50a50dc6d45d1a94230f12efa63",
+          "end_line": 7,
+          "kind": "definition",
+          "path": "studio/paint.py",
+          "start_line": 6
+        },
+        {
+          "digest": "sha256:a12145d4f8012a1cd655939c0981719cde5acb919afb27548b0f1b2384443c10",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "tools/mesa.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:77e1f46cb56b657571c99053c22aff425e2439233bdc80afb977cb715b48b13d",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "tools/lantern.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:63f3bf3e4cfb1edf08311fe599ca685bda7021127968fe4d4c2936fc24c4257c",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "tools/unused.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 286,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 1,
+      "missing_dependency_count": 2,
+      "must_cover_hits": 2,
+      "must_cover_misses": 2,
+      "native_input_tokens": 1254,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 2278,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "studio/paint.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1201,
+      "wire_total_tokens": 2225
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "relative_two_hop_chain",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:f8d41265cd725fdead110412080fe9695d6f40c6313734d63725a10bff91ed48",
+          "end_line": 5,
+          "kind": "range",
+          "path": "pkg/mid.py",
+          "start_line": 4
+        },
+        {
+          "digest": "sha256:3a8c7fd274fef99b6d85560d29ccee49673e617d4bd2a99e7dbba27ed89f1ee7",
+          "end_line": 5,
+          "kind": "range",
+          "path": "pkg/top.py",
+          "start_line": 4
+        }
+      ],
+      "dependency_attributed_tokens": 148,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 3,
+      "must_cover_hits": 1,
+      "must_cover_misses": 3,
+      "native_input_tokens": 679,
+      "native_output_tokens": null,
+      "native_total_tokens": 679,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "pkg/mid.py",
+        "pkg/top.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1956,
+      "wire_total_tokens": 2980
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v2",
+      "case_id": "relative_two_hop_chain",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:3a8c7fd274fef99b6d85560d29ccee49673e617d4bd2a99e7dbba27ed89f1ee7",
+          "end_line": 5,
+          "kind": "definition",
+          "path": "pkg/top.py",
+          "start_line": 4
+        },
+        {
+          "digest": "sha256:f8d41265cd725fdead110412080fe9695d6f40c6313734d63725a10bff91ed48",
+          "end_line": 1,
+          "kind": "range",
+          "path": "pkg/mid.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:96c5074d63fe1a3acbac5bf65e489cc7f2a23cc1547b5761bb00ed631d624909",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "pkg/leaf.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 275,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 2,
+      "must_cover_hits": 2,
+      "must_cover_misses": 2,
+      "native_input_tokens": 968,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 1992,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "pkg/top.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 915,
+      "wire_total_tokens": 1939
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "same_file_shadow_helper",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:d708db93280c66e3e4678bef92c02afa18c5b513d8ab988546769f5a1d38ae28",
+          "end_line": 2,
+          "kind": "range",
+          "path": "nest/shadow.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:d708db93280c66e3e4678bef92c02afa18c5b513d8ab988546769f5a1d38ae28",
+          "end_line": 9,
+          "kind": "range",
+          "path": "nest/shadow.py",
+          "start_line": 5
+        }
+      ],
+      "dependency_attributed_tokens": 325,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 0,
+      "must_cover_hits": 2,
+      "must_cover_misses": 0,
+      "native_input_tokens": 660,
+      "native_output_tokens": null,
+      "native_total_tokens": 660,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "nest/shadow.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1899,
+      "wire_total_tokens": 2923
+    },
+    {
+      "anchor_covered": 0,
+      "arm": "v2",
+      "case_id": "same_file_shadow_helper",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:d708db93280c66e3e4678bef92c02afa18c5b513d8ab988546769f5a1d38ae28",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "nest/shadow.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:d708db93280c66e3e4678bef92c02afa18c5b513d8ab988546769f5a1d38ae28",
+          "end_line": 7,
+          "kind": "definition",
+          "path": "nest/shadow.py",
+          "start_line": 5
+        }
+      ],
+      "dependency_attributed_tokens": 316,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 0,
+      "must_cover_hits": 2,
+      "must_cover_misses": 0,
+      "native_input_tokens": 833,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 1857,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "nest/shadow.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 780,
+      "wire_total_tokens": 1804
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "circular_module_pair",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:c53ce39123ae817a5bcc3b9126e4f482704555c7acbc564090b55fb736912a71",
+          "end_line": 5,
+          "kind": "range",
+          "path": "cycle_a.py",
+          "start_line": 4
+        },
+        {
+          "digest": "sha256:38e0ae822becb99b6648cb5f4b2cda5a90eb41ac700508ccf880bc6212d8f415",
+          "end_line": 5,
+          "kind": "range",
+          "path": "cycle_b.py",
+          "start_line": 4
+        }
+      ],
+      "dependency_attributed_tokens": 136,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 1,
+      "must_cover_hits": 1,
+      "must_cover_misses": 1,
+      "native_input_tokens": 683,
+      "native_output_tokens": null,
+      "native_total_tokens": 683,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "cycle_a.py",
+        "cycle_b.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1969,
+      "wire_total_tokens": 2993
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v2",
+      "case_id": "circular_module_pair",
+      "classification": "coverage",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:c53ce39123ae817a5bcc3b9126e4f482704555c7acbc564090b55fb736912a71",
+          "end_line": 5,
+          "kind": "definition",
+          "path": "cycle_a.py",
+          "start_line": 4
+        },
+        {
+          "digest": "sha256:38e0ae822becb99b6648cb5f4b2cda5a90eb41ac700508ccf880bc6212d8f415",
+          "end_line": 5,
+          "kind": "definition",
+          "path": "cycle_b.py",
+          "start_line": 4
+        }
+      ],
+      "dependency_attributed_tokens": 142,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 1,
+      "must_cover_hits": 1,
+      "must_cover_misses": 1,
+      "native_input_tokens": 802,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 1826,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "cycle_a.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 749,
+      "wire_total_tokens": 1773
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "ambiguous_wildcard_dynamic",
+      "classification": "uncertainty",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:3012327314670aa3416840daff4ae1892843cdedebb63f1da01fa3fce4e20d56",
+          "end_line": 5,
+          "kind": "range",
+          "path": "consumer.py",
+          "start_line": 4
+        },
+        {
+          "digest": "sha256:c7e71297b3973f712b0e95aeb982f4ae0260d81a4dad8a05272fa00fbf2ec20d",
+          "end_line": 2,
+          "kind": "range",
+          "path": "twins/one.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 130,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 1,
+      "must_cover_hits": 1,
+      "must_cover_misses": 1,
+      "native_input_tokens": 684,
+      "native_output_tokens": null,
+      "native_total_tokens": 684,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "consumer.py",
+        "twins/one.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1973,
+      "wire_total_tokens": 2997
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v2",
+      "case_id": "ambiguous_wildcard_dynamic",
+      "classification": "uncertainty",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:3012327314670aa3416840daff4ae1892843cdedebb63f1da01fa3fce4e20d56",
+          "end_line": 5,
+          "kind": "definition",
+          "path": "consumer.py",
+          "start_line": 4
+        },
+        {
+          "digest": "sha256:c7e71297b3973f712b0e95aeb982f4ae0260d81a4dad8a05272fa00fbf2ec20d",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "twins/one.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:a1c15541d5320e9b58dc5aa800122e94a0b11636b03844ee4bebac7ebeb5663e",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "twins/two.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:3012327314670aa3416840daff4ae1892843cdedebb63f1da01fa3fce4e20d56",
+          "end_line": 1,
+          "kind": "range",
+          "path": "consumer.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:923b9652f40e43d69bf57e84c605ecf02ecc4f96b1fb9fdc0cf1358bffd068c6",
+          "end_line": 1,
+          "kind": "range",
+          "path": "wild.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 265,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 2,
+      "missing_dependency_count": 0,
+      "must_cover_hits": 2,
+      "must_cover_misses": 0,
+      "native_input_tokens": 1290,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 2314,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "consumer.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1237,
+      "wire_total_tokens": 2261
+    },
+    {
+      "anchor_covered": 0,
+      "arm": "v1",
+      "case_id": "budget_exhaustion_large_def",
+      "classification": "budget",
+      "delivered_intervals": [],
+      "dependency_attributed_tokens": 0,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 2,
+      "must_cover_hits": 0,
+      "must_cover_misses": 2,
+      "native_input_tokens": 0,
+      "native_output_tokens": null,
+      "native_total_tokens": 0,
+      "notes": [
+        "v1_expansion_not_applicable",
+        "unready_zero_delivered"
+      ],
+      "profile": "tight",
+      "ready": false,
+      "reason_codes": [
+        "required_source_over_budget"
+      ],
+      "scope_paths": [
+        "bulk/stamp.py"
+      ],
+      "status": "insufficient_context",
+      "wire_input_tokens": 0,
+      "wire_total_tokens": 0
+    },
+    {
+      "anchor_covered": 0,
+      "arm": "v2",
+      "case_id": "budget_exhaustion_large_def",
+      "classification": "budget",
+      "delivered_intervals": [],
+      "dependency_attributed_tokens": 0,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 2,
+      "must_cover_hits": 0,
+      "must_cover_misses": 2,
+      "native_input_tokens": 0,
+      "native_output_tokens": 0,
+      "native_total_tokens": 0,
+      "notes": [
+        "unready_zero_delivered"
+      ],
+      "profile": "tight",
+      "ready": false,
+      "reason_codes": [
+        "required_source_over_budget"
+      ],
+      "scope_paths": [
+        "bulk/stamp.py"
+      ],
+      "status": "insufficient_context",
+      "wire_input_tokens": 0,
+      "wire_total_tokens": 0
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "control_no_dependency",
+      "classification": "control",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:42cb90f6609cd7203018ac9dfdec734318b39e2e1914b92a98eb002415ad9dbe",
+          "end_line": 2,
+          "kind": "range",
+          "path": "alone.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 0,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 0,
+      "must_cover_hits": 0,
+      "must_cover_misses": 0,
+      "native_input_tokens": 560,
+      "native_output_tokens": null,
+      "native_total_tokens": 560,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "alone.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1600,
+      "wire_total_tokens": 2624
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v2",
+      "case_id": "control_no_dependency",
+      "classification": "control",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:42cb90f6609cd7203018ac9dfdec734318b39e2e1914b92a98eb002415ad9dbe",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "alone.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 0,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 0,
+      "must_cover_hits": 0,
+      "must_cover_misses": 0,
+      "native_input_tokens": 604,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 1628,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "alone.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 551,
+      "wire_total_tokens": 1575
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v1",
+      "case_id": "control_optional_expansion",
+      "classification": "control",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:4d43da5ef7db859d2db054ad7d1c049b4da051c08454ca69200b95a9ec53932d",
+          "end_line": 2,
+          "kind": "range",
+          "path": "optional/bridge.py",
+          "start_line": 1
+        }
+      ],
+      "dependency_attributed_tokens": 0,
+      "expansion_applicable": null,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 0,
+      "missing_dependency_count": 0,
+      "must_cover_hits": 0,
+      "must_cover_misses": 0,
+      "native_input_tokens": 585,
+      "native_output_tokens": null,
+      "native_total_tokens": 585,
+      "notes": [
+        "v1_expansion_not_applicable"
+      ],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "optional/bridge.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 1676,
+      "wire_total_tokens": 2700
+    },
+    {
+      "anchor_covered": 1,
+      "arm": "v2",
+      "case_id": "control_optional_expansion",
+      "classification": "control",
+      "delivered_intervals": [
+        {
+          "digest": "sha256:4d43da5ef7db859d2db054ad7d1c049b4da051c08454ca69200b95a9ec53932d",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "optional/bridge.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:d97095303cedf4d053506412ad571a761ad42d79526f65ca25ab919d1db9d32a",
+          "end_line": 2,
+          "kind": "definition",
+          "path": "optional/lib.py",
+          "start_line": 1
+        },
+        {
+          "digest": "sha256:d97095303cedf4d053506412ad571a761ad42d79526f65ca25ab919d1db9d32a",
+          "end_line": 6,
+          "kind": "definition",
+          "path": "optional/lib.py",
+          "start_line": 5
+        }
+      ],
+      "dependency_attributed_tokens": 0,
+      "expansion_applicable": true,
+      "expansion_attempts": 0,
+      "expansion_successes": 0,
+      "forbidden_emissions": 1,
+      "missing_dependency_count": 0,
+      "must_cover_hits": 0,
+      "must_cover_misses": 0,
+      "native_input_tokens": 1029,
+      "native_output_tokens": 1024,
+      "native_total_tokens": 2053,
+      "notes": [],
+      "profile": "standard",
+      "ready": true,
+      "reason_codes": [],
+      "scope_paths": [
+        "optional/bridge.py"
+      ],
+      "status": "ready",
+      "wire_input_tokens": 976,
+      "wire_total_tokens": 2000
+    }
+  ],
+  "environment": {
+    "estimator": "conservative_estimate",
+    "model": "deepseek-flash",
+    "output_reserve": 1024,
+    "representational_notes": {
+      "expansion": "V1 expansion_applicable=null; V2 label-free registered-candidate policy",
+      "v1": "DeterministicContextProvider.build('implement') RANGES excerpts + messages",
+      "v2": "ContextPacker.open_task with required_paths edit target; dependency coverage disabled",
+      "wire": "ConservativeByteCounter.count_request on common canonical envelope"
+    }
+  },
+  "fixture_hash": "sha256:ccdaa934ddbd5c497b2c7b13aadfc4142aeda833fc415186521796b50707bd86",
+  "kind": "retrieval_dependencies_dev_baseline",
+  "manifest": {
+    "baseline_revision": "91fc0724e5eecc6af0fa519c50702b977b4bdaf9",
+    "cases": [
+      {
+        "anchors": [
+          {
+            "end_line": 5,
+            "note": "activate",
+            "path": "service/runner.py",
+            "role": "anchor",
+            "start_line": 4
+          }
+        ],
+        "case_id": "imported_class_call_annotation",
+        "classification": "coverage",
+        "edit_target": "service/runner.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "models/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "models/widget.py": "sha256:3b45d750407671639de306db924e87954e5adcc710de7668d98d8c1569fbd840",
+          "service/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "service/noise.py": "sha256:b18f3b8776c0c4173fb4787cd8ecee00dda7954ce290d4984d76c97d0942e040",
+          "service/runner.py": "sha256:6b4495980b29385c80ee01bbdec4aadfdfabd9e9a8b5d4ba5af553b719b59ded"
+        },
+        "files": {
+          "models/__init__.py": "",
+          "models/widget.py": "class HarborWidget:\n    \"\"\"Stable widget used by the runner.\"\"\"\n\n    def spin(self) -> int:\n        return 41\n",
+          "service/__init__.py": "",
+          "service/noise.py": "def unused_harbor_noise():\n    return 0\n\nPAD_ROW_0 = 0\nPAD_ROW_1 = 1\nPAD_ROW_2 = 2\nPAD_ROW_3 = 3\nPAD_ROW_4 = 4\nPAD_ROW_5 = 5\nPAD_ROW_6 = 6\nPAD_ROW_7 = 7\nPAD_ROW_8 = 8\nPAD_ROW_9 = 9\nPAD_ROW_10 = 10\nPAD_ROW_11 = 11\nPAD_ROW_12 = 12\nPAD_ROW_13 = 13\nPAD_ROW_14 = 14\nPAD_ROW_15 = 15\nPAD_ROW_16 = 16\nPAD_ROW_17 = 17\nPAD_ROW_18 = 18\nPAD_ROW_19 = 19\nPAD_ROW_20 = 20\nPAD_ROW_21 = 21\nPAD_ROW_22 = 22\nPAD_ROW_23 = 23\nPAD_ROW_24 = 24\nPAD_ROW_25 = 25\nPAD_ROW_26 = 26\nPAD_ROW_27 = 27\nPAD_ROW_28 = 28\nPAD_ROW_29 = 29\nPAD_ROW_30 = 30\nPAD_ROW_31 = 31\nPAD_ROW_32 = 32\nPAD_ROW_33 = 33\nPAD_ROW_34 = 34\nPAD_ROW_35 = 35\nPAD_ROW_36 = 36\nPAD_ROW_37 = 37\nPAD_ROW_38 = 38\nPAD_ROW_39 = 39\nPAD_ROW_40 = 40\nPAD_ROW_41 = 41\nPAD_ROW_42 = 42\nPAD_ROW_43 = 43\nPAD_ROW_44 = 44\nPAD_ROW_45 = 45\nPAD_ROW_46 = 46\nPAD_ROW_47 = 47\nPAD_ROW_48 = 48\nPAD_ROW_49 = 49\nPAD_ROW_50 = 50\nPAD_ROW_51 = 51\nPAD_ROW_52 = 52\nPAD_ROW_53 = 53\nPAD_ROW_54 = 54\nPAD_ROW_55 = 55\nPAD_ROW_56 = 56\nPAD_ROW_57 = 57\nPAD_ROW_58 = 58\nPAD_ROW_59 = 59\n",
+          "service/runner.py": "from models.widget import HarborWidget\n\n\ndef activate(item: HarborWidget) -> int:\n    return item.spin()\n\n\nPAD_ROW_0 = 0\nPAD_ROW_1 = 1\nPAD_ROW_2 = 2\nPAD_ROW_3 = 3\nPAD_ROW_4 = 4\nPAD_ROW_5 = 5\nPAD_ROW_6 = 6\nPAD_ROW_7 = 7\nPAD_ROW_8 = 8\nPAD_ROW_9 = 9\nPAD_ROW_10 = 10\nPAD_ROW_11 = 11\nPAD_ROW_12 = 12\nPAD_ROW_13 = 13\nPAD_ROW_14 = 14\nPAD_ROW_15 = 15\nPAD_ROW_16 = 16\nPAD_ROW_17 = 17\nPAD_ROW_18 = 18\nPAD_ROW_19 = 19\nPAD_ROW_20 = 20\nPAD_ROW_21 = 21\nPAD_ROW_22 = 22\nPAD_ROW_23 = 23\nPAD_ROW_24 = 24\nPAD_ROW_25 = 25\nPAD_ROW_26 = 26\nPAD_ROW_27 = 27\nPAD_ROW_28 = 28\nPAD_ROW_29 = 29\nPAD_ROW_30 = 30\nPAD_ROW_31 = 31\nPAD_ROW_32 = 32\nPAD_ROW_33 = 33\nPAD_ROW_34 = 34\nPAD_ROW_35 = 35\nPAD_ROW_36 = 36\nPAD_ROW_37 = 37\nPAD_ROW_38 = 38\nPAD_ROW_39 = 39\nPAD_ROW_40 = 40\nPAD_ROW_41 = 41\nPAD_ROW_42 = 42\nPAD_ROW_43 = 43\nPAD_ROW_44 = 44\nPAD_ROW_45 = 45\nPAD_ROW_46 = 46\nPAD_ROW_47 = 47\nPAD_ROW_48 = 48\nPAD_ROW_49 = 49\nPAD_ROW_50 = 50\nPAD_ROW_51 = 51\nPAD_ROW_52 = 52\nPAD_ROW_53 = 53\nPAD_ROW_54 = 54\nPAD_ROW_55 = 55\nPAD_ROW_56 = 56\nPAD_ROW_57 = 57\nPAD_ROW_58 = 58\nPAD_ROW_59 = 59\n"
+        },
+        "must_cover": [
+          {
+            "end_line": 5,
+            "note": "HarborWidget",
+            "path": "models/widget.py",
+            "role": "definition",
+            "start_line": 1
+          },
+          {
+            "end_line": 1,
+            "note": "HarborWidget",
+            "path": "service/runner.py",
+            "role": "import",
+            "start_line": 1
+          }
+        ],
+        "negatives": [
+          {
+            "end_line": 2,
+            "note": "unused_harbor_noise",
+            "path": "service/noise.py",
+            "role": "negative",
+            "start_line": 1
+          }
+        ],
+        "profile": "standard",
+        "task_description": "Adjust HarborWidget activation in service/runner.py",
+        "task_query": "adjust HarborWidget activation return path",
+        "task_title": "Activate harbor widget"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 7,
+            "note": "paint",
+            "path": "studio/paint.py",
+            "role": "anchor",
+            "start_line": 6
+          }
+        ],
+        "case_id": "aliased_and_unused_imports",
+        "classification": "coverage",
+        "edit_target": "studio/paint.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "studio/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "studio/paint.py": "sha256:9c7d2dc0c364184d9398982156708d3cb3a1a50a50dc6d45d1a94230f12efa63",
+          "tools/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "tools/lantern.py": "sha256:77e1f46cb56b657571c99053c22aff425e2439233bdc80afb977cb715b48b13d",
+          "tools/mesa.py": "sha256:a12145d4f8012a1cd655939c0981719cde5acb919afb27548b0f1b2384443c10",
+          "tools/unused.py": "sha256:63f3bf3e4cfb1edf08311fe599ca685bda7021127968fe4d4c2936fc24c4257c"
+        },
+        "files": {
+          "studio/__init__.py": "",
+          "studio/paint.py": "from tools.lantern import glow as shine\nimport tools.mesa as mesa_mod\nfrom tools.unused import clutter\n\n\ndef paint() -> int:\n    return shine() + mesa_mod.value()\n\n\nPAD_ROW_0 = 0\nPAD_ROW_1 = 1\nPAD_ROW_2 = 2\nPAD_ROW_3 = 3\nPAD_ROW_4 = 4\nPAD_ROW_5 = 5\nPAD_ROW_6 = 6\nPAD_ROW_7 = 7\nPAD_ROW_8 = 8\nPAD_ROW_9 = 9\nPAD_ROW_10 = 10\nPAD_ROW_11 = 11\nPAD_ROW_12 = 12\nPAD_ROW_13 = 13\nPAD_ROW_14 = 14\nPAD_ROW_15 = 15\nPAD_ROW_16 = 16\nPAD_ROW_17 = 17\nPAD_ROW_18 = 18\nPAD_ROW_19 = 19\nPAD_ROW_20 = 20\nPAD_ROW_21 = 21\nPAD_ROW_22 = 22\nPAD_ROW_23 = 23\nPAD_ROW_24 = 24\nPAD_ROW_25 = 25\nPAD_ROW_26 = 26\nPAD_ROW_27 = 27\nPAD_ROW_28 = 28\nPAD_ROW_29 = 29\nPAD_ROW_30 = 30\nPAD_ROW_31 = 31\nPAD_ROW_32 = 32\nPAD_ROW_33 = 33\nPAD_ROW_34 = 34\nPAD_ROW_35 = 35\nPAD_ROW_36 = 36\nPAD_ROW_37 = 37\nPAD_ROW_38 = 38\nPAD_ROW_39 = 39\nPAD_ROW_40 = 40\nPAD_ROW_41 = 41\nPAD_ROW_42 = 42\nPAD_ROW_43 = 43\nPAD_ROW_44 = 44\nPAD_ROW_45 = 45\nPAD_ROW_46 = 46\nPAD_ROW_47 = 47\nPAD_ROW_48 = 48\nPAD_ROW_49 = 49\nPAD_ROW_50 = 50\nPAD_ROW_51 = 51\nPAD_ROW_52 = 52\nPAD_ROW_53 = 53\nPAD_ROW_54 = 54\nPAD_ROW_55 = 55\nPAD_ROW_56 = 56\nPAD_ROW_57 = 57\nPAD_ROW_58 = 58\nPAD_ROW_59 = 59\n",
+          "tools/__init__.py": "",
+          "tools/lantern.py": "def glow() -> int:\n    return 3\n\n",
+          "tools/mesa.py": "def value() -> int:\n    return 5\n\n",
+          "tools/unused.py": "def clutter() -> int:\n    return 99\n\n"
+        },
+        "must_cover": [
+          {
+            "end_line": 2,
+            "note": "glow",
+            "path": "tools/lantern.py",
+            "role": "definition",
+            "start_line": 1
+          },
+          {
+            "end_line": 2,
+            "note": "value",
+            "path": "tools/mesa.py",
+            "role": "definition",
+            "start_line": 1
+          },
+          {
+            "end_line": 1,
+            "note": "glow as shine",
+            "path": "studio/paint.py",
+            "role": "import",
+            "start_line": 1
+          },
+          {
+            "end_line": 2,
+            "note": "tools.mesa",
+            "path": "studio/paint.py",
+            "role": "import",
+            "start_line": 2
+          }
+        ],
+        "negatives": [
+          {
+            "end_line": 2,
+            "note": "clutter",
+            "path": "tools/unused.py",
+            "role": "negative",
+            "start_line": 1
+          },
+          {
+            "end_line": 3,
+            "note": "unused_import",
+            "path": "studio/paint.py",
+            "role": "import",
+            "start_line": 3
+          }
+        ],
+        "profile": "standard",
+        "task_description": "Revise paint composition in studio/paint.py",
+        "task_query": "revise paint composition using shine and mesa",
+        "task_title": "Revise paint composition"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 5,
+            "note": "top_value",
+            "path": "pkg/top.py",
+            "role": "anchor",
+            "start_line": 4
+          }
+        ],
+        "case_id": "relative_two_hop_chain",
+        "classification": "coverage",
+        "edit_target": "pkg/top.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "pkg/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "pkg/leaf.py": "sha256:96c5074d63fe1a3acbac5bf65e489cc7f2a23cc1547b5761bb00ed631d624909",
+          "pkg/mid.py": "sha256:f8d41265cd725fdead110412080fe9695d6f40c6313734d63725a10bff91ed48",
+          "pkg/top.py": "sha256:3a8c7fd274fef99b6d85560d29ccee49673e617d4bd2a99e7dbba27ed89f1ee7"
+        },
+        "files": {
+          "pkg/__init__.py": "",
+          "pkg/leaf.py": "def leaf_value() -> int:\n    return 7\n\n",
+          "pkg/mid.py": "from .leaf import leaf_value\n\n\ndef mid_value() -> int:\n    return leaf_value()\n\n",
+          "pkg/top.py": "from .mid import mid_value\n\n\ndef top_value() -> int:\n    return mid_value()\n\n\nPAD_ROW_0 = 0\nPAD_ROW_1 = 1\nPAD_ROW_2 = 2\nPAD_ROW_3 = 3\nPAD_ROW_4 = 4\nPAD_ROW_5 = 5\nPAD_ROW_6 = 6\nPAD_ROW_7 = 7\nPAD_ROW_8 = 8\nPAD_ROW_9 = 9\nPAD_ROW_10 = 10\nPAD_ROW_11 = 11\nPAD_ROW_12 = 12\nPAD_ROW_13 = 13\nPAD_ROW_14 = 14\nPAD_ROW_15 = 15\nPAD_ROW_16 = 16\nPAD_ROW_17 = 17\nPAD_ROW_18 = 18\nPAD_ROW_19 = 19\nPAD_ROW_20 = 20\nPAD_ROW_21 = 21\nPAD_ROW_22 = 22\nPAD_ROW_23 = 23\nPAD_ROW_24 = 24\nPAD_ROW_25 = 25\nPAD_ROW_26 = 26\nPAD_ROW_27 = 27\nPAD_ROW_28 = 28\nPAD_ROW_29 = 29\nPAD_ROW_30 = 30\nPAD_ROW_31 = 31\nPAD_ROW_32 = 32\nPAD_ROW_33 = 33\nPAD_ROW_34 = 34\nPAD_ROW_35 = 35\nPAD_ROW_36 = 36\nPAD_ROW_37 = 37\nPAD_ROW_38 = 38\nPAD_ROW_39 = 39\nPAD_ROW_40 = 40\nPAD_ROW_41 = 41\nPAD_ROW_42 = 42\nPAD_ROW_43 = 43\nPAD_ROW_44 = 44\nPAD_ROW_45 = 45\nPAD_ROW_46 = 46\nPAD_ROW_47 = 47\nPAD_ROW_48 = 48\nPAD_ROW_49 = 49\nPAD_ROW_50 = 50\nPAD_ROW_51 = 51\nPAD_ROW_52 = 52\nPAD_ROW_53 = 53\nPAD_ROW_54 = 54\nPAD_ROW_55 = 55\nPAD_ROW_56 = 56\nPAD_ROW_57 = 57\nPAD_ROW_58 = 58\nPAD_ROW_59 = 59\n"
+        },
+        "must_cover": [
+          {
+            "end_line": 5,
+            "note": "mid_value",
+            "path": "pkg/mid.py",
+            "role": "definition",
+            "start_line": 4
+          },
+          {
+            "end_line": 2,
+            "note": "leaf_value",
+            "path": "pkg/leaf.py",
+            "role": "definition",
+            "start_line": 1
+          },
+          {
+            "end_line": 1,
+            "note": "mid_value",
+            "path": "pkg/top.py",
+            "role": "import",
+            "start_line": 1
+          },
+          {
+            "end_line": 1,
+            "note": "leaf_value",
+            "path": "pkg/mid.py",
+            "role": "import",
+            "start_line": 1
+          }
+        ],
+        "negatives": [],
+        "profile": "standard",
+        "task_description": "Update top_value in pkg/top.py",
+        "task_query": "update top_value relative import chain",
+        "task_title": "Update top value"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 9,
+            "note": "outer",
+            "path": "nest/shadow.py",
+            "role": "anchor",
+            "start_line": 5
+          }
+        ],
+        "case_id": "same_file_shadow_helper",
+        "classification": "coverage",
+        "edit_target": "nest/shadow.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "nest/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "nest/shadow.py": "sha256:d708db93280c66e3e4678bef92c02afa18c5b513d8ab988546769f5a1d38ae28"
+        },
+        "files": {
+          "nest/__init__.py": "",
+          "nest/shadow.py": "def helper() -> int:\n    return 1\n\n\ndef outer() -> int:\n    def helper() -> int:\n        return 2\n\n    return helper()\n\n\nPAD_ROW_0 = 0\nPAD_ROW_1 = 1\nPAD_ROW_2 = 2\nPAD_ROW_3 = 3\nPAD_ROW_4 = 4\nPAD_ROW_5 = 5\nPAD_ROW_6 = 6\nPAD_ROW_7 = 7\nPAD_ROW_8 = 8\nPAD_ROW_9 = 9\nPAD_ROW_10 = 10\nPAD_ROW_11 = 11\nPAD_ROW_12 = 12\nPAD_ROW_13 = 13\nPAD_ROW_14 = 14\nPAD_ROW_15 = 15\nPAD_ROW_16 = 16\nPAD_ROW_17 = 17\nPAD_ROW_18 = 18\nPAD_ROW_19 = 19\nPAD_ROW_20 = 20\nPAD_ROW_21 = 21\nPAD_ROW_22 = 22\nPAD_ROW_23 = 23\nPAD_ROW_24 = 24\nPAD_ROW_25 = 25\nPAD_ROW_26 = 26\nPAD_ROW_27 = 27\nPAD_ROW_28 = 28\nPAD_ROW_29 = 29\nPAD_ROW_30 = 30\nPAD_ROW_31 = 31\nPAD_ROW_32 = 32\nPAD_ROW_33 = 33\nPAD_ROW_34 = 34\nPAD_ROW_35 = 35\nPAD_ROW_36 = 36\nPAD_ROW_37 = 37\nPAD_ROW_38 = 38\nPAD_ROW_39 = 39\nPAD_ROW_40 = 40\nPAD_ROW_41 = 41\nPAD_ROW_42 = 42\nPAD_ROW_43 = 43\nPAD_ROW_44 = 44\nPAD_ROW_45 = 45\nPAD_ROW_46 = 46\nPAD_ROW_47 = 47\nPAD_ROW_48 = 48\nPAD_ROW_49 = 49\nPAD_ROW_50 = 50\nPAD_ROW_51 = 51\nPAD_ROW_52 = 52\nPAD_ROW_53 = 53\nPAD_ROW_54 = 54\nPAD_ROW_55 = 55\nPAD_ROW_56 = 56\nPAD_ROW_57 = 57\nPAD_ROW_58 = 58\nPAD_ROW_59 = 59\n"
+        },
+        "must_cover": [
+          {
+            "end_line": 2,
+            "note": "helper",
+            "path": "nest/shadow.py",
+            "role": "definition",
+            "start_line": 1
+          },
+          {
+            "end_line": 7,
+            "note": "helper",
+            "path": "nest/shadow.py",
+            "role": "definition",
+            "start_line": 6
+          }
+        ],
+        "negatives": [],
+        "profile": "standard",
+        "task_description": "Clarify outer helper shadowing in nest/shadow.py",
+        "task_query": "clarify outer helper shadowing behavior",
+        "task_title": "Clarify shadow helper"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 5,
+            "note": "a_value",
+            "path": "cycle_a.py",
+            "role": "anchor",
+            "start_line": 4
+          }
+        ],
+        "case_id": "circular_module_pair",
+        "classification": "coverage",
+        "edit_target": "cycle_a.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "cycle_a.py": "sha256:c53ce39123ae817a5bcc3b9126e4f482704555c7acbc564090b55fb736912a71",
+          "cycle_b.py": "sha256:38e0ae822becb99b6648cb5f4b2cda5a90eb41ac700508ccf880bc6212d8f415"
+        },
+        "files": {
+          "cycle_a.py": "import cycle_b\n\n\ndef a_value() -> int:\n    return cycle_b.b_value()\n\n",
+          "cycle_b.py": "import cycle_a\n\n\ndef b_value() -> int:\n    return 11\n\n\nPAD_ROW_0 = 0\nPAD_ROW_1 = 1\nPAD_ROW_2 = 2\nPAD_ROW_3 = 3\nPAD_ROW_4 = 4\nPAD_ROW_5 = 5\nPAD_ROW_6 = 6\nPAD_ROW_7 = 7\nPAD_ROW_8 = 8\nPAD_ROW_9 = 9\nPAD_ROW_10 = 10\nPAD_ROW_11 = 11\nPAD_ROW_12 = 12\nPAD_ROW_13 = 13\nPAD_ROW_14 = 14\nPAD_ROW_15 = 15\nPAD_ROW_16 = 16\nPAD_ROW_17 = 17\nPAD_ROW_18 = 18\nPAD_ROW_19 = 19\nPAD_ROW_20 = 20\nPAD_ROW_21 = 21\nPAD_ROW_22 = 22\nPAD_ROW_23 = 23\nPAD_ROW_24 = 24\nPAD_ROW_25 = 25\nPAD_ROW_26 = 26\nPAD_ROW_27 = 27\nPAD_ROW_28 = 28\nPAD_ROW_29 = 29\nPAD_ROW_30 = 30\nPAD_ROW_31 = 31\nPAD_ROW_32 = 32\nPAD_ROW_33 = 33\nPAD_ROW_34 = 34\nPAD_ROW_35 = 35\nPAD_ROW_36 = 36\nPAD_ROW_37 = 37\nPAD_ROW_38 = 38\nPAD_ROW_39 = 39\nPAD_ROW_40 = 40\nPAD_ROW_41 = 41\nPAD_ROW_42 = 42\nPAD_ROW_43 = 43\nPAD_ROW_44 = 44\nPAD_ROW_45 = 45\nPAD_ROW_46 = 46\nPAD_ROW_47 = 47\nPAD_ROW_48 = 48\nPAD_ROW_49 = 49\nPAD_ROW_50 = 50\nPAD_ROW_51 = 51\nPAD_ROW_52 = 52\nPAD_ROW_53 = 53\nPAD_ROW_54 = 54\nPAD_ROW_55 = 55\nPAD_ROW_56 = 56\nPAD_ROW_57 = 57\nPAD_ROW_58 = 58\nPAD_ROW_59 = 59\n"
+        },
+        "must_cover": [
+          {
+            "end_line": 5,
+            "note": "b_value",
+            "path": "cycle_b.py",
+            "role": "definition",
+            "start_line": 4
+          },
+          {
+            "end_line": 1,
+            "note": "cycle_b",
+            "path": "cycle_a.py",
+            "role": "import",
+            "start_line": 1
+          }
+        ],
+        "negatives": [],
+        "profile": "standard",
+        "task_description": "Stabilize circular pair starting at cycle_a.py",
+        "task_query": "stabilize circular a_value and b_value pair",
+        "task_title": "Stabilize cycle pair"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 5,
+            "note": "use_twin",
+            "path": "consumer.py",
+            "role": "anchor",
+            "start_line": 4
+          }
+        ],
+        "case_id": "ambiguous_wildcard_dynamic",
+        "classification": "uncertainty",
+        "edit_target": "consumer.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "consumer.py": "sha256:3012327314670aa3416840daff4ae1892843cdedebb63f1da01fa3fce4e20d56",
+          "dynamic.py": "sha256:18649b5d6476892a3f9eaab42e5955a9316150c3fb8fcc7cd6b82c3ed63e4fa4",
+          "twins/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "twins/one.py": "sha256:c7e71297b3973f712b0e95aeb982f4ae0260d81a4dad8a05272fa00fbf2ec20d",
+          "twins/two.py": "sha256:a1c15541d5320e9b58dc5aa800122e94a0b11636b03844ee4bebac7ebeb5663e",
+          "wild.py": "sha256:923b9652f40e43d69bf57e84c605ecf02ecc4f96b1fb9fdc0cf1358bffd068c6"
+        },
+        "files": {
+          "consumer.py": "from twins.one import Twin\n\n\ndef use_twin(item: Twin) -> str:\n    return item.tag\n\n",
+          "dynamic.py": "def load_name(module_name: str, attr: str):\n    return getattr(__import__(module_name), attr)\n\n",
+          "twins/__init__.py": "",
+          "twins/one.py": "class Twin:\n    tag = 'one'\n\n",
+          "twins/two.py": "class Twin:\n    tag = 'two'\n\n",
+          "wild.py": "from twins.one import *\n\n"
+        },
+        "must_cover": [
+          {
+            "end_line": 2,
+            "note": "Twin",
+            "path": "twins/one.py",
+            "role": "definition",
+            "start_line": 1
+          },
+          {
+            "end_line": 1,
+            "note": "Twin",
+            "path": "consumer.py",
+            "role": "import",
+            "start_line": 1
+          }
+        ],
+        "negatives": [
+          {
+            "end_line": 2,
+            "note": "duplicate",
+            "path": "twins/two.py",
+            "role": "negative",
+            "start_line": 1
+          },
+          {
+            "end_line": 1,
+            "note": "wildcard",
+            "path": "wild.py",
+            "role": "negative",
+            "start_line": 1
+          },
+          {
+            "end_line": 2,
+            "note": "load_name",
+            "path": "dynamic.py",
+            "role": "negative",
+            "start_line": 1
+          }
+        ],
+        "profile": "standard",
+        "task_description": "Inspect Twin consumer in consumer.py",
+        "task_query": "inspect Twin consumer without guessing duplicates",
+        "task_title": "Inspect twin consumer"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 5,
+            "note": "stamp",
+            "path": "bulk/stamp.py",
+            "role": "anchor",
+            "start_line": 4
+          }
+        ],
+        "case_id": "budget_exhaustion_large_def",
+        "classification": "budget",
+        "edit_target": "bulk/stamp.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "bulk/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bulk/payload.py": "sha256:aef2afb6b6dc7a7289401e0f67af64db2732b79a093a96112453fe93f1e3d1e5",
+          "bulk/stamp.py": "sha256:f5845abe98e9954390c56a0f7d615a83c2d624218f4d16df3eebab9162e6b95f"
+        },
+        "files": {
+          "bulk/__init__.py": "",
+          "bulk/payload.py": "class MassivePayload:\n    def __init__(self) -> None:\n        self.slot_0 = 0\n        self.slot_1 = 1\n        self.slot_2 = 2\n        self.slot_3 = 3\n        self.slot_4 = 4\n        self.slot_5 = 5\n        self.slot_6 = 6\n        self.slot_7 = 7\n        self.slot_8 = 8\n        self.slot_9 = 9\n        self.slot_10 = 10\n        self.slot_11 = 11\n        self.slot_12 = 12\n        self.slot_13 = 13\n        self.slot_14 = 14\n        self.slot_15 = 15\n        self.slot_16 = 16\n        self.slot_17 = 17\n        self.slot_18 = 18\n        self.slot_19 = 19\n        self.slot_20 = 20\n        self.slot_21 = 21\n        self.slot_22 = 22\n        self.slot_23 = 23\n        self.slot_24 = 24\n        self.slot_25 = 25\n        self.slot_26 = 26\n        self.slot_27 = 27\n        self.slot_28 = 28\n        self.slot_29 = 29\n        self.slot_30 = 30\n        self.slot_31 = 31\n        self.slot_32 = 32\n        self.slot_33 = 33\n        self.slot_34 = 34\n        self.slot_35 = 35\n        self.slot_36 = 36\n        self.slot_37 = 37\n        self.slot_38 = 38\n        self.slot_39 = 39\n        self.slot_40 = 40\n        self.slot_41 = 41\n        self.slot_42 = 42\n        self.slot_43 = 43\n        self.slot_44 = 44\n        self.slot_45 = 45\n        self.slot_46 = 46\n        self.slot_47 = 47\n        self.slot_48 = 48\n        self.slot_49 = 49\n        self.slot_50 = 50\n        self.slot_51 = 51\n        self.slot_52 = 52\n        self.slot_53 = 53\n        self.slot_54 = 54\n        self.slot_55 = 55\n        self.slot_56 = 56\n        self.slot_57 = 57\n        self.slot_58 = 58\n        self.slot_59 = 59\n        self.slot_60 = 60\n        self.slot_61 = 61\n        self.slot_62 = 62\n        self.slot_63 = 63\n        self.slot_64 = 64\n        self.slot_65 = 65\n        self.slot_66 = 66\n        self.slot_67 = 67\n        self.slot_68 = 68\n        self.slot_69 = 69\n        self.slot_70 = 70\n        self.slot_71 = 71\n        self.slot_72 = 72\n        self.slot_73 = 73\n        self.slot_74 = 74\n        self.slot_75 = 75\n        self.slot_76 = 76\n        self.slot_77 = 77\n        self.slot_78 = 78\n        self.slot_79 = 79\n        self.slot_80 = 80\n        self.slot_81 = 81\n        self.slot_82 = 82\n        self.slot_83 = 83\n        self.slot_84 = 84\n        self.slot_85 = 85\n        self.slot_86 = 86\n        self.slot_87 = 87\n        self.slot_88 = 88\n        self.slot_89 = 89\n        self.slot_90 = 90\n        self.slot_91 = 91\n        self.slot_92 = 92\n        self.slot_93 = 93\n        self.slot_94 = 94\n        self.slot_95 = 95\n        self.slot_96 = 96\n        self.slot_97 = 97\n        self.slot_98 = 98\n        self.slot_99 = 99\n        self.slot_100 = 100\n        self.slot_101 = 101\n        self.slot_102 = 102\n        self.slot_103 = 103\n        self.slot_104 = 104\n        self.slot_105 = 105\n        self.slot_106 = 106\n        self.slot_107 = 107\n        self.slot_108 = 108\n        self.slot_109 = 109\n        self.slot_110 = 110\n        self.slot_111 = 111\n        self.slot_112 = 112\n        self.slot_113 = 113\n        self.slot_114 = 114\n        self.slot_115 = 115\n        self.slot_116 = 116\n        self.slot_117 = 117\n        self.slot_118 = 118\n        self.slot_119 = 119\n\n    def fingerprint(self) -> int:\n        return len(self.__dict__)\n\n",
+          "bulk/stamp.py": "from bulk.payload import MassivePayload\n\n\ndef stamp() -> int:\n    return MassivePayload().fingerprint()\n\n"
+        },
+        "must_cover": [
+          {
+            "end_line": 125,
+            "note": "MassivePayload",
+            "path": "bulk/payload.py",
+            "role": "definition",
+            "start_line": 1
+          },
+          {
+            "end_line": 1,
+            "note": "MassivePayload",
+            "path": "bulk/stamp.py",
+            "role": "import",
+            "start_line": 1
+          }
+        ],
+        "negatives": [],
+        "profile": "tight",
+        "task_description": "Stamp MassivePayload fingerprint in bulk/stamp.py",
+        "task_query": "stamp MassivePayload fingerprint under tight budget",
+        "task_title": "Stamp massive payload"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 2,
+            "note": "solo_mark",
+            "path": "alone.py",
+            "role": "anchor",
+            "start_line": 1
+          }
+        ],
+        "case_id": "control_no_dependency",
+        "classification": "control",
+        "edit_target": "alone.py",
+        "expansion": {
+          "enabled": false,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "alone.py": "sha256:42cb90f6609cd7203018ac9dfdec734318b39e2e1914b92a98eb002415ad9dbe"
+        },
+        "files": {
+          "alone.py": "def solo_mark() -> str:\n    return 'ok'\n\n"
+        },
+        "must_cover": [],
+        "negatives": [],
+        "profile": "standard",
+        "task_description": "Keep solo_mark behavior in alone.py",
+        "task_query": "keep solo_mark behavior unchanged",
+        "task_title": "Keep solo mark"
+      },
+      {
+        "anchors": [
+          {
+            "end_line": 2,
+            "note": "bridge",
+            "path": "optional/bridge.py",
+            "role": "anchor",
+            "start_line": 1
+          }
+        ],
+        "case_id": "control_optional_expansion",
+        "classification": "control",
+        "edit_target": "optional/bridge.py",
+        "expansion": {
+          "enabled": true,
+          "max_attempts": 2
+        },
+        "file_digests": {
+          "optional/__init__.py": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "optional/bridge.py": "sha256:4d43da5ef7db859d2db054ad7d1c049b4da051c08454ca69200b95a9ec53932d",
+          "optional/lib.py": "sha256:d97095303cedf4d053506412ad571a761ad42d79526f65ca25ab919d1db9d32a"
+        },
+        "files": {
+          "optional/__init__.py": "",
+          "optional/bridge.py": "def bridge() -> str:\n    return 'bridge'\n\n\n# optional_hint lives in optional/lib.py for explicit expansion only\n",
+          "optional/lib.py": "def optional_hint() -> str:\n    return 'hint'\n\n\ndef decoy_noise() -> str:\n    return 'noise'\n\nPAD_ROW_0 = 0\nPAD_ROW_1 = 1\nPAD_ROW_2 = 2\nPAD_ROW_3 = 3\nPAD_ROW_4 = 4\nPAD_ROW_5 = 5\nPAD_ROW_6 = 6\nPAD_ROW_7 = 7\nPAD_ROW_8 = 8\nPAD_ROW_9 = 9\nPAD_ROW_10 = 10\nPAD_ROW_11 = 11\nPAD_ROW_12 = 12\nPAD_ROW_13 = 13\nPAD_ROW_14 = 14\nPAD_ROW_15 = 15\nPAD_ROW_16 = 16\nPAD_ROW_17 = 17\nPAD_ROW_18 = 18\nPAD_ROW_19 = 19\nPAD_ROW_20 = 20\nPAD_ROW_21 = 21\nPAD_ROW_22 = 22\nPAD_ROW_23 = 23\nPAD_ROW_24 = 24\nPAD_ROW_25 = 25\nPAD_ROW_26 = 26\nPAD_ROW_27 = 27\nPAD_ROW_28 = 28\nPAD_ROW_29 = 29\nPAD_ROW_30 = 30\nPAD_ROW_31 = 31\nPAD_ROW_32 = 32\nPAD_ROW_33 = 33\nPAD_ROW_34 = 34\nPAD_ROW_35 = 35\nPAD_ROW_36 = 36\nPAD_ROW_37 = 37\nPAD_ROW_38 = 38\nPAD_ROW_39 = 39\nPAD_ROW_40 = 40\nPAD_ROW_41 = 41\nPAD_ROW_42 = 42\nPAD_ROW_43 = 43\nPAD_ROW_44 = 44\nPAD_ROW_45 = 45\nPAD_ROW_46 = 46\nPAD_ROW_47 = 47\nPAD_ROW_48 = 48\nPAD_ROW_49 = 49\nPAD_ROW_50 = 50\nPAD_ROW_51 = 51\nPAD_ROW_52 = 52\nPAD_ROW_53 = 53\nPAD_ROW_54 = 54\nPAD_ROW_55 = 55\nPAD_ROW_56 = 56\nPAD_ROW_57 = 57\nPAD_ROW_58 = 58\nPAD_ROW_59 = 59\n"
+        },
+        "must_cover": [],
+        "negatives": [
+          {
+            "end_line": 6,
+            "note": "decoy_noise",
+            "path": "optional/lib.py",
+            "role": "negative",
+            "start_line": 5
+          }
+        ],
+        "profile": "standard",
+        "task_description": "Bridge entrypoint in optional/bridge.py",
+        "task_query": "bridge entrypoint with optional hint available",
+        "task_title": "Bridge with optional hint"
+      }
+    ],
+    "model": "deepseek-flash",
+    "output_reserve": 1024,
+    "profiles": {
+      "standard": {
+        "name": "standard",
+        "v1_per_file_chars_max": 12000,
+        "v1_stage_prompt_tokens_max": 6000,
+        "v1_total_code_chars_max": 40000,
+        "v2_cumulative_source_tokens": 8192,
+        "v2_map_tokens": 512,
+        "v2_max_expansions": 2,
+        "v2_output_tokens": 1024,
+        "v2_source_tokens": 4096,
+        "v2_system_tokens": 1024,
+        "v2_task_tokens": 1024,
+        "v2_tool_tokens": 2048,
+        "v2_total_tokens": 8192
+      },
+      "tight": {
+        "name": "tight",
+        "v1_per_file_chars_max": 240,
+        "v1_stage_prompt_tokens_max": 180,
+        "v1_total_code_chars_max": 240,
+        "v2_cumulative_source_tokens": 200,
+        "v2_map_tokens": 80,
+        "v2_max_expansions": 1,
+        "v2_output_tokens": 200,
+        "v2_source_tokens": 120,
+        "v2_system_tokens": 120,
+        "v2_task_tokens": 120,
+        "v2_tool_tokens": 80,
+        "v2_total_tokens": 900
+      }
+    }
+  },
+  "profiles": {
+    "standard": {
+      "name": "standard",
+      "v1_per_file_chars_max": 12000,
+      "v1_stage_prompt_tokens_max": 6000,
+      "v1_total_code_chars_max": 40000,
+      "v2_cumulative_source_tokens": 8192,
+      "v2_map_tokens": 512,
+      "v2_max_expansions": 2,
+      "v2_output_tokens": 1024,
+      "v2_source_tokens": 4096,
+      "v2_system_tokens": 1024,
+      "v2_task_tokens": 1024,
+      "v2_tool_tokens": 2048,
+      "v2_total_tokens": 8192
+    },
+    "tight": {
+      "name": "tight",
+      "v1_per_file_chars_max": 240,
+      "v1_stage_prompt_tokens_max": 180,
+      "v1_total_code_chars_max": 240,
+      "v2_cumulative_source_tokens": 200,
+      "v2_map_tokens": 80,
+      "v2_max_expansions": 1,
+      "v2_output_tokens": 200,
+      "v2_source_tokens": 120,
+      "v2_system_tokens": 120,
+      "v2_task_tokens": 120,
+      "v2_tool_tokens": 80,
+      "v2_total_tokens": 900
+    }
+  },
+  "version": 1
+}

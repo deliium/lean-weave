@@ -299,3 +299,41 @@ def test_v2_authority_digest_is_versioned_and_v1_stays_legacy(tmp_path: Path):
         }
     )
     assert session._authority_digest(changed, approval, ("parse",)) != v2_digest
+
+    # Disabled dependency coverage must keep the prior digest shape (key absent).
+    from lean_weave.config.models import DependencyCoverageConfig
+
+    still_disabled = v2.model_copy(
+        update={
+            "context": v2.context.model_copy(
+                update={"dependency_coverage": DependencyCoverageConfig(enabled=False)}
+            )
+        }
+    )
+    assert session._authority_digest(still_disabled, approval, ("parse",)) == v2_digest
+
+    enabled = v2.model_copy(
+        update={
+            "context": v2.context.model_copy(
+                update={
+                    "dependency_coverage": DependencyCoverageConfig(
+                        enabled=True, max_depth=1, max_tokens=256
+                    )
+                }
+            )
+        }
+    )
+    enabled_digest = session._authority_digest(enabled, approval, ("parse",))
+    assert enabled_digest != v2_digest
+    tighter = enabled.model_copy(
+        update={
+            "context": enabled.context.model_copy(
+                update={
+                    "dependency_coverage": DependencyCoverageConfig(
+                        enabled=True, max_depth=1, max_tokens=128
+                    )
+                }
+            )
+        }
+    )
+    assert session._authority_digest(tighter, approval, ("parse",)) != enabled_digest

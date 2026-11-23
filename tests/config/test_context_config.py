@@ -171,3 +171,44 @@ def test_workflow_mode_is_independent_of_preview_flags():
     assert context.workflow_mode == "v2"
     assert context.packing.cli_default is False
     assert context.cache.enabled is False
+
+
+def test_dependency_coverage_defaults_disabled():
+    coverage = AppConfig().context.dependency_coverage
+    assert coverage.enabled is False
+    assert coverage.max_depth == 2
+    assert coverage.max_definitions == 8
+    assert coverage.max_tokens == 1024
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"context": {"dependency_coverage": {"unknown": 1}}},
+        {"context": {"dependency_coverage": {"enabled": "true"}}},
+        {"context": {"dependency_coverage": {"max_depth": True}}},
+        {"context": {"dependency_coverage": {"max_depth": 5}}},
+        {"context": {"dependency_coverage": {"max_definitions": 33}}},
+        {"context": {"dependency_coverage": {"max_tokens": 8193}}},
+        {"context": {"dependency_coverage": {"max_depth": "2"}}},
+        {"context": {"dependency_coverage": {"max_tokens": 1.5}}},
+    ],
+)
+def test_invalid_dependency_coverage_config(payload):
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(payload)
+
+
+def test_dependency_coverage_zero_bounds_are_valid():
+    coverage = ContextConfig(
+        dependency_coverage={
+            "enabled": True,
+            "max_depth": 0,
+            "max_definitions": 0,
+            "max_tokens": 0,
+        }
+    ).dependency_coverage
+    assert coverage.enabled is True
+    assert coverage.max_depth == 0
+    assert coverage.max_definitions == 0
+    assert coverage.max_tokens == 0

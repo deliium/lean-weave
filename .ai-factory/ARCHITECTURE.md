@@ -153,6 +153,19 @@ than source bodies. The DeepSeek adapter attaches a local wire guard validated
 before gateway booking or transport. `app.py::create_context_packer` is lazy; no
 index maintenance, stage prompt change, or orchestrator dependency is added.
 
+`context/dependency_coverage.py` is the opt-in L1/L2 packing policy for verified
+use-site closure. `DependencyAnalyzer` builds a scan-local AST projection over
+already-admitted snapshots plus a scoped import graph from `repository_map/`; it
+resolves unique unconditional imports and top-level definitions, retains whole
+original import statements when referenced, and reports typed uncertainty instead
+of guessing. `ContextPacker` fits mandatory roots and proven closure before map
+rows, applies independent `context.dependency_coverage` depth/definition/token
+ceilings under existing total/source caps, and binds analyzer contract version plus
+exact relationships onto expansion receipts for delivery-time re-proof against the
+original checked read universe. ContextCache may reuse path-local facts/spans only;
+dependency links, traversals, and ready packs are never persisted. Disabled mode
+keeps legacy packing and receipt bytes unchanged.
+
 `metrics/analytics.py` and `workflow/stats.py` are read-only reporting
 projections over the existing atomic attempt journal and control checkpoint.
 They never book a second charge or create a second telemetry store.

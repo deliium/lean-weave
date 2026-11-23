@@ -208,7 +208,9 @@ uv run wl context budget "wire the provider seam" --json
 Legacy invocation is the default. `--packed` / `--pack-level` opt into V2;
 `--legacy` always restores the V1 view. Conflicting explicit signals exit `2`.
 Setting `context.packing.cli_default: true` makes bare `build QUERY` and
-`inspect QUERY` packed without changing the other commands.
+`inspect QUERY` packed without changing the other commands. Opt-in
+`context.dependency_coverage` (disabled by default) adds bounded verified
+definition closure during L1 packing; see [context-packing.md](context-packing.md).
 
 ### Expansion and provenance
 

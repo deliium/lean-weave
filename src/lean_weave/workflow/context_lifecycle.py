@@ -16,6 +16,7 @@ from typing import Any
 from lean_weave.code_index import CodeIndex
 from lean_weave.code_index.identity import resolve_checkout
 from lean_weave.config.models import AppConfig
+from lean_weave.context.dependency_coverage import ANALYZER_CONTRACT_VERSION
 from lean_weave.context.models import iter_lines
 from lean_weave.context.packer import ContextPacker
 from lean_weave.context.packing_models import (
@@ -819,9 +820,14 @@ class WorkflowContextAdapter:
         except (InvalidContextRequest, ValueError):
             return self._read_failure("invalid")
         if result.status == "ready" and result.pack is not None:
-            additions: list[FragmentRef] = []
+            # Only the explicit read root becomes a forced root. Dependency
+            # closure fragments stay attributed and are recomputed on the next
+            # guarded round rather than being promoted to depth-zero seeds.
+            root_refs: list[FragmentRef] = []
             for fragment in result.pack.fragments:
-                additions.append(
+                if fragment.path != path:
+                    continue
+                root_refs.append(
                     FragmentRef(
                         fragment_id=fragment.fragment_id,
                         path=fragment.path,
@@ -831,21 +837,24 @@ class WorkflowContextAdapter:
                         kind=fragment.kind,
                     )
                 )
-            self._forced = [*self._forced, *additions][-_MAX_FRAGMENT_REFS:]
+            if root_refs:
+                self._forced = [*self._forced, root_refs[0]][-_MAX_FRAGMENT_REFS:]
             self._telemetry.expansion_successes += 1
-            ref = additions[0] if additions else None
-            return ToolCallResult(
-                status="ok",
-                content={
-                    "ok": True,
-                    "status": "ok",
-                    "path": path,
-                    "revision": snapshot.raw_revision or snapshot.digest,
-                    "start_line": ref.start_line if ref else None,
-                    "end_line": ref.end_line if ref else None,
-                    "guidance": "Accepted source is in the current scoped source block.",
-                },
-            )
+            ref = root_refs[0] if root_refs else None
+            staged = self.config.context.dependency_coverage.enabled
+            content: dict[str, Any] = {
+                "ok": True,
+                "status": "ok",
+                "path": path,
+                "revision": snapshot.raw_revision or snapshot.digest,
+                "start_line": ref.start_line if ref else None,
+                "end_line": ref.end_line if ref else None,
+                "guidance": "Accepted source is in the current scoped source block.",
+            }
+            if staged:
+                content["staged_for_round"] = True
+                content["forced_root_only"] = True
+            return ToolCallResult(status="ok", content=content)
         if result.status == "no_change":
             self._telemetry.duplicate_fragments += 1
             self._telemetry.duplicate_bytes += max(0, snapshot.size_bytes)
@@ -866,7 +875,11 @@ class WorkflowContextAdapter:
         if reason in {REASON_SOURCE_CHANGED, REASON_SOURCE_SCAN_INCOMPLETE}:
             self._telemetry.outcome = "stale"
             return self._read_failure("stale")
-        if reason in {REASON_EXPANSION_LIMIT, REASON_REQUIRED_SOURCE_OVER_BUDGET, REASON_TOTAL_BUDGET}:
+        if reason in {
+            REASON_EXPANSION_LIMIT,
+            REASON_REQUIRED_SOURCE_OVER_BUDGET,
+            REASON_TOTAL_BUDGET,
+        } or reason.startswith("dependency_limit:"):
             return self._read_failure("oversized")
         return self._read_failure("unsupported")
 
@@ -993,7 +1006,10 @@ class WorkflowContextAdapter:
                 REASON_TOTAL_BUDGET,
                 REASON_REQUIRED_SOURCE_OVER_BUDGET,
             )
-        ) or any(code.startswith("section_budget") for code in reasons):
+        ) or any(
+            code.startswith("section_budget") or code.startswith("dependency_limit:")
+            for code in reasons
+        ):
             category = "budget_exhausted"
         elif any(code in reasons for code in (REASON_SOURCE_CHANGED, REASON_SOURCE_SCAN_INCOMPLETE)):
             category = "context_stale"
@@ -1031,7 +1047,7 @@ def context_authority_material(
     """Versioned V2-only authority material; no secrets or source text."""
 
     context = config.context
-    return {
+    payload: dict[str, Any] = {
         "workflow_mode": context.workflow_mode,
         "protected": sorted(approval.protected),
         "read_allow": sorted(approval.read_allow),
@@ -1068,3 +1084,10 @@ def context_authority_material(
         },
         "check_ids": sorted(check_ids),
     }
+    # Absent when disabled so pre-existing checkpoints keep their digest.
+    if context.dependency_coverage.enabled:
+        payload["dependency_coverage"] = {
+            **context.dependency_coverage.model_dump(mode="json"),
+            "analyzer_contract_version": ANALYZER_CONTRACT_VERSION,
+        }
+    return payload

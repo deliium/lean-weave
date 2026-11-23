@@ -207,6 +207,16 @@ def _packed_payload(
         payload["source_revisions"] = [
             item.model_dump(mode="json") for item in pack.source_revisions
         ]
+        if pack.dependency_coverage is not None:
+            payload["dependency_coverage"] = pack.dependency_coverage.model_dump(
+                mode="json"
+            )
+            payload["dependency_evidence"] = [
+                item.model_dump(mode="json") for item in pack.dependency_evidence
+            ]
+            payload["dependency_issues"] = [
+                item.model_dump(mode="json") for item in pack.dependency_issues
+            ]
         return payload
     payload["model"] = pack.model
     payload["map_rows"] = [
@@ -233,6 +243,17 @@ def _packed_payload(
     payload["relation_evidence"] = [
         item.model_dump(mode="json") for item in pack.relation_evidence
     ]
+    if pack.dependency_coverage is not None:
+        # Inspect: counters and evidence metadata, never fragment text.
+        payload["dependency_coverage"] = pack.dependency_coverage.model_dump(
+            mode="json"
+        )
+        payload["dependency_evidence"] = [
+            item.model_dump(mode="json") for item in pack.dependency_evidence
+        ]
+        payload["dependency_issues"] = [
+            item.model_dump(mode="json") for item in pack.dependency_issues
+        ]
     return payload
 
 
@@ -273,6 +294,14 @@ def _packed_human(
             ]
         )
     lines = [header]
+    if pack.dependency_coverage is not None:
+        summary = pack.dependency_coverage
+        lines.append(
+            "dependency="
+            f"status={summary.status} complete={summary.coverage_complete} "
+            f"defs={summary.definitions_added} imports={summary.imports_added} "
+            f"charged={summary.charged_tokens}/{summary.effective_token_ceiling}"
+        )
     if pack.omissions:
         lines.append(
             "omissions="
