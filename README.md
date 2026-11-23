@@ -63,6 +63,7 @@ uv run wl feature --help
 | [Worktree workflow](docs/worktree-workflow.md) | Feature CLI, approvals, cancel, cleanup |
 | [Benchmarks](docs/benchmarks.md) | Installed run/compare/report, thresholds, fixture corpus, live limits, V2 protocol |
 | [V2 readiness](docs/v2-readiness.md) | V2 end-to-end validation, token/retrieval/cache evidence, verdict and risks |
+| [V2 release evidence](docs/v2-release-evidence.md) | Clean-build binding, blind holdout protocol, offline/live dispositions, decide gates |
 | [MVP 1 readiness](docs/mvp1-readiness.md) | Offline/live/safety verdicts and evidence links |
 
 ### Agent artifacts

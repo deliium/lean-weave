@@ -30,7 +30,8 @@ def test_symbol_metrics_null_when_no_symbol_labels():
 
 
 def test_tight_pack_can_miss_required_dependency():
-    payload = evaluate_retrieval("holdout_invoice_tight", "v2_tight")
+    # Development analogue of a tight budget vs required dependency coverage.
+    payload = evaluate_retrieval("multi_file_banner", "v2_tight")
     assert payload["pack"]["required_dependency_count"] >= 1
     assert payload["pack"]["missing_dependency_count"] >= 0
     assert payload["conditions"]["source_tokens"] == 512

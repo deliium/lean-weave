@@ -128,9 +128,11 @@ def wheel_sha256() -> str | None:
 def release_binding() -> dict[str, Any]:
     """Describe whether this run can qualify as formal release evidence.
 
-    Source runs from a dirty tree, or runs without a wheel hash bound to the
-    source revision and lock digest, are explicitly ineligible rather than
-    treated as matching evidence.
+    Observational fields remain compatible with historical records. An
+    environment-supplied wheel hash alone is never formal proof: new runs
+    require the verified artifact-binding protocol under
+    ``benchmarks/release_evidence.py``. Dirty trees and missing hashes remain
+    explicit ineligibility reasons.
     """
 
     dirty = code_tree_dirty()
@@ -143,6 +145,9 @@ def release_binding() -> dict[str, Any]:
         reasons.append("wheel_hash_unavailable")
         if kind == "source":
             reasons.append("source_run_no_wheel")
+    else:
+        # LEAN_WEAVE_BENCHMARK_WHEEL is observational only; it cannot certify.
+        reasons.append("formal_binding_required")
     return {
         "available": True,
         "installation_kind": kind,

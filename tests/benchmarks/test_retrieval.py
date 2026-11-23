@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from lean_weave.benchmark import retrieval as retrieval_mod
 from lean_weave.benchmark.retrieval import (
-    CASES_PATH,
     GIT_SIGNAL_DECOY,
     GIT_SIGNAL_LABELED,
     RankedHit,
@@ -19,18 +19,24 @@ from lean_weave.benchmark.retrieval import (
     run_comparison,
     run_git_signal_comparison,
 )
+from tests.benchmarks.conftest import DEV_CASES, HISTORICAL_CASES
 
 
 def test_cases_are_well_formed():
     cases = load_cases()
     assert cases
-    assert CASES_PATH.is_file()
+    assert retrieval_mod.CASES_PATH == DEV_CASES
+    assert retrieval_mod.CASES_PATH.is_file()
+    assert HISTORICAL_CASES.is_file(), "historical catalog must remain on disk"
     ids = [case.id for case in cases]
     assert ids == sorted(ids)
     assert any(case.repository == "bug_fix" for case in cases)
-    assert any(case.split == "holdout" for case in cases)
+    assert all(case.split == "development" for case in cases)
+    assert not any(case.id.startswith("holdout_") for case in cases)
     kinds = {case.task_kind for case in cases}
-    assert {"bugfix", "feature", "refactor", "test", "diagnose"} <= kinds
+    assert {"bugfix", "feature", "refactor", "test"} <= kinds
+    historical = json.loads(HISTORICAL_CASES.read_text(encoding="utf-8"))
+    assert any(item.get("split") == "holdout" for item in historical)
 
 
 def test_precision_recall_helpers():
@@ -103,7 +109,7 @@ def test_comparison_runs_offline(tmp_path, monkeypatch):
     assert bug["v1_prompt"]["budget_tokens"] == 2048
     assert isinstance(bug["v1_prompt"]["excerpts"], list)
 
-    diagnose = next(item for item in report["cases"] if item["id"] == "holdout_diagnose")
+    diagnose = next(item for item in report["cases"] if item["id"] == "multi_file_banner")
     assert "gold_range_covered" in diagnose["v2_warm"]["cost"]
 
     git = report["git_signal"]

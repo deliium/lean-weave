@@ -176,6 +176,13 @@ retrieval suites, run/compare/report schema, threshold eligibility, explicit
 live admission), with `benchmarks/` retained as a compatibility wrapper. V1
 workflow defaults, budgets and verification paths are unchanged.
 
+Operator-only release evidence lives under `benchmarks/release_evidence.py`,
+`release_blind_capture.py`, and `release_blind_score.py`. These are stdlib or
+developer wrappers that bind clean double builds, freeze run IDs, publish
+offline/live/blind receipts, and emit fail-closed decide verdicts. They are not
+product CLI surfaces, do not change V1 defaults, and never persist holdout
+oracles into the package.
+
 ## ADRs
 
 | ADR | Topic |

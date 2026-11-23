@@ -166,14 +166,18 @@ def test_condition_capture_reacts_to_model_and_verifier_changes(tmp_path, monkey
 
 
 def test_release_binding_records_supplied_wheel_hash(tmp_path, monkeypatch):
+    from lean_weave.benchmark import conditions
     from lean_weave.benchmark.conditions import release_binding
 
     wheel = tmp_path / "pkg-0.1-py3-none-any.whl"
     wheel.write_bytes(b"wheel-bytes")
     monkeypatch.setenv("LEAN_WEAVE_BENCHMARK_WHEEL", str(wheel))
+    monkeypatch.setattr(conditions, "code_tree_dirty", lambda: False)
     binding = release_binding()
     assert binding["wheel_sha256"].startswith("sha256:")
     assert "wheel_hash_unavailable" not in binding["reasons"]
-    # The working tree is dirty during this run, so formal eligibility stays off.
+    # Environment wheel hashes remain observational; formal eligibility needs
+    # the verified artifact-binding protocol.
     assert binding["release_eligible"] is False
-    assert "source_tree_dirty" in binding["reasons"]
+    assert "formal_binding_required" in binding["reasons"]
+    assert "source_tree_dirty" not in binding["reasons"]
